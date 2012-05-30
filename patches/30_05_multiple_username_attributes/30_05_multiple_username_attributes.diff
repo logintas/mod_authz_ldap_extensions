@@ -1,0 +1,211 @@
+diff -rN -u mod_authz_ldap-0.30.old/docs/reference.html mod_authz_ldap-0.30/docs/reference.html
+--- mod_authz_ldap-0.30.old/docs/reference.html	2010-02-17 18:49:28.000000000 +0100
++++ mod_authz_ldap-0.30/docs/reference.html	2012-04-26 14:54:42.000000000 +0200
+@@ -46,6 +46,7 @@
+ 
+ <li><a href="#AuthzLDAPUserBase">AuthzLDAPUserBase</a>
+ <li><a href="#AuthzLDAPUserKey">AuthzLDAPUserKey</a>
++<li><a href="#AuthzLDAPUsernameAttributes">AuthzLDAPUsernameAttributes</a>
+ <li><a href="#AuthzLDAPUserScope">AuthzLDAPUserScope</a>
+ 
+ <li><a href="#AuthzLDAPGroupBase">AuthzLDAPGroupBase</a>
+@@ -158,6 +159,15 @@
+ for the user</a>.
+ 
+ <hr noshade size="1" />
++<strong>Syntax:</strong> <a name="AuthzLDAPUsernameAttributes"></a>AuthzLDAPUsernameAttributes<i>attributename [ attributname ... ]</i><br />
++<strong>Context:</strong> virtual host, directory<br />
++<strong>Default:</strong> none<br />
++The value of this directive defines the search filter used to <a href="configuration.html#ldapauth">search
++for the user. You can define multiple attributes to use to lookup the username given by the user in the LDAP directory.
++If no values are defined here, the value of AuthzLDAPUserKey is used for the search filter instead. So, this configuration
++statement is optional.</a>.
++
++<hr noshade size="1" />
+ <strong>Syntax:</strong> <a name="AuthzLDAPUserScope"></a>AuthzLDAPUserScope {base|onlevel|subtree}<br />
+ <strong>Context:</strong> virtual host, directory<br />
+ <strong>Default:</strong> base<br />
+diff -rN -u mod_authz_ldap-0.30.old/module/auth.c mod_authz_ldap-0.30/module/auth.c
+--- mod_authz_ldap-0.30.old/module/auth.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/auth.c	2012-04-26 14:54:42.000000000 +0200
+@@ -16,6 +16,62 @@
+ *************************************************************************/
+ static int	initial_authenticated = 0;
+ 
++char	*authz_ldap_username_filter(request_rec *r, char *outbuffer,
++		size_t buffersize, char *username) {
++
++	char			*attr;
++	int			outi;
++	int			i;
++	char			tempbuffer[MAX_STRING_LEN];
++	authz_ldap_config_rec	*sec;
++
++	/* if the target buffer is no set, we cannot do anything */
++	if (outbuffer == NULL) {
++		AUTHZ_RDEBUG("no output buffer");
++		return NULL;
++	}
++
++	/* get the configuration record from the request		*/
++	sec = (authz_ldap_config_rec *)ap_get_module_config(r->per_dir_config,
++		&authz_ldap_module);
++
++#define	addstring(w)							\
++	outi += snprintf(&outbuffer[outi], buffersize - outi, "%s", w)
++
++	/* start with clean buffer */
++	memset(outbuffer, 0, buffersize);
++	outi = 0;
++
++	if (apr_is_empty_array(sec->username_attributes)) {
++		/* use sec->userkey */
++		apr_snprintf(outbuffer, buffersize, "(%s=%s)", sec->userkey, username);
++	} else {
++		/* use elements in sec->username_attributes */
++
++		int n = sec->username_attributes->nelts;	/* number of elements */
++
++		if (n == 1) {
++			/* one element, simple filter */
++			/* use sec->username_attributes[0] */
++			/*attr = APR_ARRAY_IDX(sec->username_attributes, 0, char *);*/
++ 			attr = ((char **)sec->username_attributes->elts)[0];
++
++			apr_snprintf(outbuffer, buffersize, "(%s=%s)", attr, username);
++		} else {
++			/* multiple elements, construct "|" filter */
++			addstring("(|");
++			for (i = 0; i < n; i++) {
++				attr = ((char **)sec->username_attributes->elts)[i];
++				apr_snprintf(tempbuffer, sizeof(tempbuffer), "(%s=%s)", attr, username);
++				addstring(tempbuffer);
++			}
++			addstring(")");
++		}
++	}
++
++	return outbuffer;
++}
++
+ /* authenticate a user using an ordinary ldap bind call			*/
+ /* XXX This strategy causes frequent rebinds to the ldap server, and	*/
+ /*     a possibly large number of message digest computations for	*/
+@@ -55,14 +111,15 @@
+ 	/* if a subtree search is required, do it on the anonymous	*/
+ 	/* connection 							*/
+ 	if (sec->userscope) {
+-		AUTHZ_RDEBUG("[%d] %s search for %s=%s", (int)getpid(),
++		/* formulate the search filter				*/
++		authz_ldap_username_filter(r, dn, MAX_STRING_LEN, USER(r));
++		AUTHZ_RDEBUG("[%d] %s search for %s", (int)getpid(),
+ 			(sec->userscope == LDAP_SCOPE_ONELEVEL)	? "onelevel"
+ 								: "subtree",
+-			sec->userkey, USER(r));
++			dn);
+ 
+-		/* formulate the search filter				*/
+-		apr_snprintf(dn, MAX_STRING_LEN, "(%s=%s)", sec->userkey,
+-			USER(r));
++		/*apr_snprintf(dn, MAX_STRING_LEN, "(%s=%s)", sec->userkey,
++			USER(r));*/
+ 		AUTHZ_RDEBUG("[%d] search filter is %s", (int)getpid(), dn);
+ 
+ 		/* if we have a AuthzLDAPMapUser attribute, we also ask	*/
+@@ -80,9 +137,8 @@
+ 			ldap_msgfree(result);
+ 			if (sec->loglevel >= APLOG_ERR)
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-				"[%d] filter: (%s=%s) base: %s, not found",
+-				(int)getpid(), sec->userkey,
+-				USER(r),
++				"[%d] filter: %s base: %s, not found",
++				(int)getpid(), dn,
+ 				sec->userbase);
+ 			ap_note_basic_auth_failure(r);
+ 			return HTTP_UNAUTHORIZED;
+@@ -94,9 +150,8 @@
+ 			ldap_msgfree(result);
+ 			if (sec->loglevel >= APLOG_ERR)
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-				"[%d] filter: (%s=%s) base: %s, not unique",
+-				(int)getpid(), sec->userkey,
+-				USER(r),
++				"[%d] filter: %s base: %s, not unique",
++				(int)getpid(), dn,
+ 				sec->userbase);
+ 			ap_note_basic_auth_failure(r);
+ 			return HTTP_UNAUTHORIZED;
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.h mod_authz_ldap-0.30/module/mod_authz_ldap.h
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.h	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.h	2012-04-26 14:54:42.000000000 +0200
+@@ -101,6 +101,7 @@
+ 	/* User settings						*/
+ 	char	*userbase;	/* AuthzLDAPUserBase			*/
+ 	char	*userkey;	/* AuthzLDAPUserKey			*/
++	apr_array_header_t	*username_attributes;	/* AuthzLDAPUsernameAttributes	*/	/* multiple values		*/
+ 	int	userscope;	/* AuthzLDAPUserScope			*/
+ 	int	bindmapped;	/* set by AuthzLDAPMethod		*/
+ 
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
+@@ -36,6 +36,30 @@
+ 	return NULL;
+ }
+ 
++/* iterate over all values of AuthzLDAPUsernameAttributes */
++static const char	*authz_ldap_set_username_attributes_slot(cmd_parms *parms,
++	void *mconfig, const char *arg) {
++
++	authz_ldap_config_rec	*sec;
++	char                    *value;
++	char			**element;
++
++	sec = (authz_ldap_config_rec *)mconfig;
++
++
++#ifdef AUTHZ_LDAP_DEBUG
++	fprintf(stderr, "%s:%d: adding username_attributes value at %p: '%s'\n",
++		__FILE__, __LINE__, (void *)sec, (arg) ? arg : "(null)");
++#endif
++
++	/* add value to sec->username_attributes array */
++	value = apr_pstrdup(parms->pool, arg);
++	element = (char **)apr_array_push(sec->username_attributes);
++	*element = value;
++
++	return NULL;
++}
++
+ static const char	*authz_ldap_set_group_scope_slot(cmd_parms *parms,
+ 	void *mconfig, const char *arg) {
+ 	authz_ldap_config_rec	*sec;
+@@ -335,6 +359,11 @@
+ 		OR_AUTHCFG,
+ 		"The attribute name associated with the userid"
+ 	),
++	AP_INIT_ITERATE(
++		"AuthzLDAPUsernameAttributes", authz_ldap_set_username_attributes_slot, NULL,
++		OR_AUTHCFG,
++		"The attribute name(s) associated with the username"
++	),
+ 	AP_INIT_TAKE1(
+ 		"AuthzLDAPUserBase", ap_set_string_slot,
+ 		(void *)APR_OFFSETOF(authz_ldap_config_rec, userbase),
+@@ -486,6 +515,7 @@
+ 		/* user configuration					*/
+ 		sec->userbase = NULL;
+ 		sec->userkey = NULL;
++		sec->username_attributes = apr_array_make(p, 2, sizeof(char *));
+ 		sec->userscope = LDAP_SCOPE_BASE;
+ 		sec->bindmapped = 0;
+ 
+@@ -541,6 +571,7 @@
+ 
+ 	authz_ldap_link(userbase);
+ 	authz_ldap_link(userkey);
++	authz_ldap_link(username_attributes);
+ 
+ 	authz_ldap_link(groupbase);
+ 	authz_ldap_link(groupkey);

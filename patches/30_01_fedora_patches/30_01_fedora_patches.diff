@@ -1,0 +1,137 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/auth.c mod_authz_ldap-0.30/module/auth.c
+--- mod_authz_ldap-0.30.old/module/auth.c	2010-02-06 10:24:18.000000000 +0100
++++ mod_authz_ldap-0.30/module/auth.c	2012-04-26 14:52:01.000000000 +0200
+@@ -189,7 +189,7 @@
+ 	if (res != LDAP_SUCCESS) {
+ 		if (sec->loglevel >= APLOG_ERR)
+ 		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-			"[%d] bind as %s/%s failed: %d", (int)getpid(), dn, pw,
++			"[%d] bind as %s failed: %d", (int)getpid(), dn,
+ 			res);
+ 		ap_note_basic_auth_failure(r);
+ 		return HTTP_UNAUTHORIZED;
+@@ -220,6 +220,14 @@
+ 	AUTHZ_RDEBUG("[%d] authz_ldap_auth called for uri %s", (int)getpid(),
+ 		r->uri);
+ 
++	/* find out whether we have to do anything at all		*/
++	if (AUTHMETHOD_NONE == sec->method) {
++		AUTHZ_RDEBUG("[%d] authz_ldap not activeated in %x (see "
++			"AuthzLDAPMethod)", (int)getpid(), (unsigned int)sec);
++		rc = DECLINED;
++		goto auth_end;
++	}
++
+ 	/* if this is a subrequest the primary of which has been	*/
+ 	/* authenticated successfully, we simply return after copying	*/
+ 	/* the notes							*/
+@@ -237,14 +245,6 @@
+ 	AUTHZ_RDEBUG("[%d] processing main request", (int)getpid());
+ 	initial_authenticated = 0;
+ 
+-	/* find out whether we have to do anything at all		*/
+-	if (AUTHMETHOD_NONE == sec->method) {
+-		AUTHZ_RDEBUG("[%d] authz_ldap not activeated in %x (see "
+-			"AuthzLDAPMethod)", (int)getpid(), (unsigned int)sec);
+-		rc = DECLINED;
+-		goto auth_end;
+-	}
+-
+ 	/* find the default value to return (need sec for this to work)	*/
+ 	rc = AUTHZ_DECLINED;
+ 
+diff -rN -u mod_authz_ldap-0.30.old/module/certmap.c mod_authz_ldap-0.30/module/certmap.c
+--- mod_authz_ldap-0.30.old/module/certmap.c	2010-02-06 10:55:03.000000000 +0100
++++ mod_authz_ldap-0.30/module/certmap.c	2012-04-26 14:52:01.000000000 +0200
+@@ -13,8 +13,19 @@
+ #include <openssl/pem.h>
+ #include <openssl/x509v3.h>
+ #ifdef AUTHZ_LDAP_HAVE_SSL
+-extern char	*ssl_var_lookup(apr_pool_t *, server_rec *, conn_rec *,
+-			request_rec *, char *);
++static char *do_ssl_var_lookup(apr_pool_t *p, server_rec *s, conn_rec *c,
++                               request_rec *r, char *v)
++{
++    APR_OPTIONAL_FN_TYPE(ssl_var_lookup) *lookupfn;
++
++    lookupfn = APR_RETRIEVE_OPTIONAL_FN(ssl_var_lookup);
++    
++    if (lookupfn) {
++        return lookupfn(p, s, c, r, v);
++    } else {
++        return NULL;
++    }
++}
+ #else
+ static int	sslwarningsent = 0;
+ static void	sendsslwarning(request_rec *r) {
+@@ -39,7 +50,7 @@
+ #ifdef AUTHZ_LDAP_HAVE_SSL
+ 	char			*issuer_dn;
+ 
+-	issuer_dn = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	issuer_dn = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_I_DN");
+ 	AUTHZ_RDEBUG("[%d] client issuer DN: %s", (int)getpid(),
+ 		(issuer_dn) ? issuer_dn : "(null)");
+@@ -60,7 +71,7 @@
+ 	X509		*xs;
+ 
+ 	/* retrieve the certificate in PEM form				*/
+-	xp = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	xp = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_CERT");
+ 	if (NULL == xp) { 
+ 		AUTHZ_RDEBUG("[%d] not certificate found", (int)getpid());
+@@ -108,7 +119,7 @@
+ #ifdef AUTHZ_LDAP_HAVE_SSL
+ 	char	*subject_dn;
+ 
+-	subject_dn = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	subject_dn = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_S_DN");
+ 	AUTHZ_RDEBUG("[%d] client subject DN: %s", (int)getpid(),
+ 		(subject_dn) ? subject_dn : "(null)");
+@@ -125,7 +136,7 @@
+ 	char	*cp;
+ 
+ 	/* get serial number from X509 client certificate		*/
+-	cp = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	cp = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_M_SERIAL");
+ 	AUTHZ_RDEBUG("[%d] client serial: %s", (int)getpid(),
+ 		(cp) ? cp : "(null)");
+@@ -181,7 +192,7 @@
+ 	X509_NAME	*name;
+ 
+ 	/* retrieve the certificate in PEM form				*/
+-	xp = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	xp = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_CERT");
+ 	if (NULL == xp) { 
+ 		AUTHZ_RDEBUG("[%d] not certificate found", (int)getpid());
+@@ -268,7 +279,7 @@
+ 	ASN1_OBJECT	*upnoid;
+ 
+ 	/* retrieve the certificate in PEM form				*/
+-	xp = ssl_var_lookup(r->pool, r->server, r->connection, r,
++	xp = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
+ 		"SSL_CLIENT_CERT");
+ 	if (NULL == xp) { 
+ 		AUTHZ_RDEBUG("[%d] not certificate found", (int)getpid());
+@@ -361,11 +372,11 @@
+ /* utility function to escape parentheses in filter expressions */
+ static void	authz_ldap_escape_parentheses(char *org, char *new) {
+ 	char	*p = org, *q = new;
+-	while ((*p) && ((q - new) < MAX_STRING_LEN))
+-		if ((*p == '(') || (*p == ')')) {
++	while ((*p) && ((q - new) < MAX_STRING_LEN)) {
++		if ((*p == '(') || (*p == ')'))
+ 			*q++ = '\\';
+-			*q++ = *p++;
+-		}
++		*q++ = *p++;
++	}
+ 	*q = '\0';
+ }
+ 

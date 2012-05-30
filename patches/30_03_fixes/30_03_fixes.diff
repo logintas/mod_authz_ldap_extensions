@@ -1,0 +1,11 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2010-10-21 12:27:32.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
+@@ -459,6 +459,7 @@
+ 		sec->userbase = NULL;
+ 		sec->userkey = NULL;
+ 		sec->userscope = LDAP_SCOPE_BASE;
++		sec->bindmapped = 0;
+ 
+ 		/* group configuration					*/
+ 		sec->groupbase = NULL;

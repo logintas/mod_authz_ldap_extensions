@@ -1,0 +1,281 @@
+diff -rN -u mod_authz_ldap-0.30.old/docs/README.map_by_email mod_authz_ldap-0.30/docs/README.map_by_email
+--- mod_authz_ldap-0.30.old/docs/README.map_by_email	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/docs/README.map_by_email	2012-04-26 14:54:43.000000000 +0200
+@@ -0,0 +1,52 @@
++Mapping by E-mail
++=================
++
++The mapping method 'email' supports mapping from the certificate's
++subject alternative name 'email' to the attribute 'mail' in the users's
++LDAP entry. This is useful to avoid an explicit mapping in the LDAP
++directory.
++
++If the user's certificate contains the user's e-mail address, the e-mail
++address is part of the certification, and thus we may lookup the user
++in the LDAP directory just by the user's e-mail address. This makes it
++possible to authenticate users without first importing their certificates
++(or parts of it) in the directory. It's enough to add the users' e-mail
++address to their LDAP entries. (Of course, we must only accept certificates
++from trusted CAs.)
++
++The mapping method 'email_or_upn' additionally looks for userPrincipalName
++in a certificate, if no e-mail address could be found. It then treats
++the userPrincipalName as a regular e-mail adress. This is suitable to support
++certificates used in a Microsoft Windows environment, but to lookup
++e-mail addresses. (Actually, the LDAP filter will contain the attribute
++userPrincipalName, too.)
++
++Required Apache configuration:
++
++Support E-Mail only:
++  AuthzLDAPMethod certificate
++  AuthzLDAPMapMethod email
++
++Support E-Mail and User Principal Name:
++  AuthzLDAPMethod certificate
++  AuthzLDAPMapMethod email_or_upn
++
++Example:
++
++<Location />
++  AuthName          AuthzLDAP
++  AuthType          Basic
++
++  AuthzLDAPServer "localhost:389"
++
++  # authentication
++  AuthzLDAPMethod certificate
++  AuthzLDAPMapMethod email
++  AuthzLDAPMapBase ou=users,dc=company,dc=com
++  AuthzLDAPMapScope subtree
++
++  # authorization
++  AuthzLDAPSetGroupAuth ldapdn
++
++  require group cn=MyGroup,ou=groups,dc=company,dc=com
++</Location>
+diff -rN -u mod_authz_ldap-0.30.old/docs/reference.html mod_authz_ldap-0.30/docs/reference.html
+--- mod_authz_ldap-0.30.old/docs/reference.html	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/docs/reference.html	2012-04-26 14:54:43.000000000 +0200
+@@ -90,7 +90,7 @@
+ 
+ <hr noshade size="1" />
+ <strong>Syntax:</strong> <a name="AuthzLDAPMapMethod"></a>AuthzLDAPMapMethod
+-<i>{ certificate | issuerserial | issuersubject | ad }</i><br />
++<i>{ certificate | issuerserial | issuersubject | ad | email | email_or_upn }</i><br />
+ <strong>Context:</strong> virtual host, directory<br />
+ <strong>Default:</strong> none <br />
+ Defines how the module should map the certificate to an LDAP directory node.
+@@ -117,6 +117,30 @@
+ filter for the altSecurityIdentities attribute.
+ </p>
+ 
++<p>
++The mapping method <i>email</i> supports mapping from the certificate's
++subject alternative name <i>email</i> to the attributes <i>mail</i>
++or <i>email</i> in the users's LDAP entry. This is useful to avoid an
++explicit mapping in the LDAP
++directory.
++
++If the user's certificate contains the user's e-mail address, the e-mail
++address is part of the certification, and thus we may lookup the user
++in the LDAP directory just by the user's e-mail address. This makes it
++possible to authenticate users without first importing their certificates
++(or parts of it) in the directory. It's enough to add the users' e-mail
++address to their LDAP entries. (Of course, we must only accept certificates
++from trusted CAs.)
++
++The mapping method <i>email_or_upn</i> additionally looks for <i>userPrincipalName</i>
++in a certificate, if no e-mail address could be found. It then treats
++the <i>userPrincipalName</i> as a regular e-mail adress and matches the value of
++the certificate's <i>userPrincipalName</i> field against the LDAP fields
++<i>mail</i>, <i>email</i> or <i>userPrincipalName</i>. This is suitable to support
++certificates used in a Microsoft Windows environment, but to lookup
++e-mail addresses.
++</p>
++
+ <hr noshade size="1" />
+ <strong>Syntax:</strong> <a name="AuthzLDAPServer"></a>AuthzLDAPServer <i>host</i>[:<i>port</i>]<br />
+ <strong>Context:</strong> virtual host, directory<br />
+diff -rN -u mod_authz_ldap-0.30.old/module/certmap.c mod_authz_ldap-0.30/module/certmap.c
+--- mod_authz_ldap-0.30.old/module/certmap.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/certmap.c	2012-04-26 14:54:43.000000000 +0200
+@@ -369,6 +369,96 @@
+ #endif /* AUTHZ_LDAP_HAVE_SSL */
+ }
+ 
++/* the function authz_ldap_get_subject_alternative_name_email were contributed by
++   Logintas AG.
++
++        The existing mapping mechanisms require some data about the used certificiates
++        existing in the LDAP directory. We looked for a solution for an implicit
++        mapping from the certificate to the user's LDAP entry.
++        We thought the e-mail address contained in the certificate should be unique
++        enough. Furthermore, the e-mail adress contained in the certificate is part
++        of the certification, after all. Thus, we could just extract the e-mail address
++        and look for a user entry containing this e-mail address.
++
++        TODO: Currently, we only consider the first found email address. But there may be
++              more than one.
++ */
++char	*authz_ldap_get_subject_alternative_name_email(authz_ldap_config_rec *sec, request_rec *r) {
++#ifdef AUTHZ_LDAP_HAVE_SSL
++	BIO		*bio_mem;
++	char		*xp;
++	X509		*xs;
++	int		l;
++	char		*v = NULL;
++
++	X509_EXTENSION *pExt;
++	char *pBuffer = 0;
++	int length = 0;
++	GENERAL_NAMES *subjectAltNames;
++
++	/* retrieve the certificate in PEM form				*/
++	xp = do_ssl_var_lookup(r->pool, r->server, r->connection, r,
++		"SSL_CLIENT_CERT");
++	if (NULL == xp) { 
++		AUTHZ_RDEBUG("[%d] not certificate found", (int)getpid());
++		return NULL;
++	}
++
++	/* turn the PEM data into a X.509 structure			*/
++	bio_mem = BIO_new(BIO_s_mem());
++	BIO_write(bio_mem, xp, strlen(xp) + 1);
++	xs = PEM_read_bio_X509(bio_mem, NULL, NULL, NULL);
++	BIO_free(bio_mem);
++	if (NULL == xs) {
++		AUTHZ_RDEBUG("[%d] could not read certificate from PEM: %s",
++			(int)getpid(), xp);
++		return NULL;
++	}
++
++        /* http://www.mail-archive.com/openssl-users@openssl.org/msg53273.html */
++	subjectAltNames = (GENERAL_NAMES *) X509_get_ext_d2i(xs,
++			NID_subject_alt_name, NULL, NULL);
++	if (subjectAltNames) {
++		int numalts;
++		int i;
++
++		/* get amount of alternatives, RFC2459 claims there MUST be at least 
++		  one, but we don't depend on it... */
++		numalts = sk_GENERAL_NAME_num(subjectAltNames);
++
++		/* loop through all alternatives */
++		for (i = 0; (i < numalts); i++) {
++			/* get a handle to alternative name number i */
++			const GENERAL_NAME *pName = sk_GENERAL_NAME_value(subjectAltNames, i);
++
++			if (pName->type == GEN_EMAIL) {
++				ASN1_STRING_to_UTF8((unsigned char**)&pBuffer, pName->d.ia5);
++
++		  		/* copy the value out */
++                                l = strlen(pBuffer);
++				v = apr_palloc(r->pool, l + 1);
++				memcpy(v, pBuffer, l);
++				v[l] = '\0';
++
++				AUTHZ_RDEBUG("[%d] found email: %s",
++				     (int)getpid(), v);
++
++				OPENSSL_free(pBuffer);
++				break;
++			}
++		}
++        }
++
++	X509_free(xs);
++
++
++
++	return v;
++#else /* AUTHZ_LDAP_HAVE_SSL */
++	return NULL;
++#endif /* AUTHZ_LDAP_HAVE_SSL */
++}
++
+ /* utility function to escape parentheses in filter expressions */
+ static void	authz_ldap_escape_parentheses(char *org, char *new) {
+ 	char	*p = org, *q = new;
+@@ -502,6 +592,42 @@
+ 		base = sec->mapbase;
+ 		scope = sec->mapscope;
+ 	}
++	if ((AUTHMAPMETHOD_EMAIL == sec->mapmethod) || (AUTHMAPMETHOD_EMAIL_OR_UPN == sec->mapmethod)) {
++		char * subject_alt_name_email;
++		char * ms_user_principal_name;
++
++		AUTHZ_RDEBUG("[%d] mapping e-mail address",
++			(int)getpid());
++
++		if (NULL != (subject_alt_name_email = authz_ldap_get_subject_alternative_name_email(sec, r))) {
++			/* compare against mail field
++			 * email (aka emailAddress) is deprecated in favour of mail
++			 * we just support both of them
++			 */
++			apr_snprintf(filter, MAX_STRING_LEN,
++				    "(|(mail=%s)(email=%s))", subject_alt_name_email, subject_alt_name_email);
++		} else if ((AUTHMAPMETHOD_EMAIL_OR_UPN == sec->mapmethod) && (NULL != (ms_user_principal_name = authz_ldap_get_ms_user_principal_name(sec, r)))) {
++			/*
++			 * userPrincipalName is actually not a real e-mail address but a (username/domain) pair.
++			 * We just use it as e-mail address to support certificates from the Windows environment.
++			 * To be strict, wie also add userPrincipalName to the LDAP filter.
++			 */
++
++			/* compare against mail field
++			 * email (aka emailAddress) is deprecated in favour of mail
++			 * we just support both of them
++			 */
++			apr_snprintf(filter, MAX_STRING_LEN,
++				    "(|(mail=%s)(email=%s)(userPrincipalName=%s))", ms_user_principal_name, ms_user_principal_name, ms_user_principal_name);
++		} else {
++			AUTHZ_RDEBUG("[%d] mapping for e-mail failed: ",
++				     (int)getpid());
++			apr_snprintf(filter, MAX_STRING_LEN,
++				    "(nosuchattribute=nosuchvalue)");
++		}
++		base = sec->mapbase;
++		scope = sec->mapscope;
++	}
+ 	AUTHZ_RDEBUG("[%d] authz_ldap_search for certificate mapping: "
+ 		"base = %s, filter = %s", (int)getpid(), sec->mapbase, filter);
+ 
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.h mod_authz_ldap-0.30/module/mod_authz_ldap.h
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.h	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.h	2012-04-26 14:54:43.000000000 +0200
+@@ -78,12 +78,16 @@
+ #define	AUTHMAPMETHOD_ISSUERSERIAL	2
+ #define	AUTHMAPMETHOD_ISSUERSUBJECT	3
+ #define	AUTHMAPMETHOD_AD		4
++#define	AUTHMAPMETHOD_EMAIL		5
++#define	AUTHMAPMETHOD_EMAIL_OR_UPN	6
+ #define	AUTHMAPMETHOD_NEEDSOWNER(s)	\
+ 	((s == AUTHMAPMETHOD_ISSUERSERIAL) || \
+ 	(s == AUTHMAPMETHOD_ISSUERSUBJECT))
+ #define	AUTHMAPMETHOD_RETURNSUSER(s)	\
+ 	((s == AUTHMAPMETHOD_CERTIFICATE) || \
+-	(s == AUTHMAPMETHOD_AD))
++	(s == AUTHMAPMETHOD_AD) || \
++	(s == AUTHMAPMETHOD_EMAIL) || \
++	(s == AUTHMAPMETHOD_EMAIL_OR_UPN))
+ 
+ typedef struct {
+ 	/* whether or not to be active					*/
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:54:43.000000000 +0200
+@@ -208,6 +208,14 @@
+ 		sec->mapmethod = AUTHMAPMETHOD_AD;
+ 		return NULL;
+ 	}
++	if (0 == strcasecmp(arg, "email")) {
++		sec->mapmethod = AUTHMAPMETHOD_EMAIL;
++		return NULL;
++	}
++	if (0 == strcasecmp(arg, "email_or_upn")) {
++		sec->mapmethod = AUTHMAPMETHOD_EMAIL_OR_UPN;
++		return NULL;
++	}
+ 	return "unknown certificate mapping method";
+ }
+ 

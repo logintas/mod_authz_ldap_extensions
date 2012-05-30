@@ -1,0 +1,48 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:54:43.000000000 +0200
+@@ -297,6 +297,11 @@
+ 		sec->trusted_mode = APR_LDAP_STARTTLS;
+ 		return NULL;
+ 	}
++	if ((0 == strcasecmp(arg, "ssl"))) {
++		sec->trusted_mode = APR_LDAP_SSL;
++		return NULL;
++	}
++
+ 	return "unknown trusted mode";
+ }
+ 
+@@ -338,7 +343,7 @@
+ 		"AuthzLDAPTrustedMode", authz_ldap_set_trusted_mode_slot,
+ 		(void *)APR_OFFSETOF(authz_ldap_config_rec, trusted_mode),
+ 		OR_AUTHCFG,
+-		"Trusted mode to use: NONE or TLS"
++		"Trusted mode to use: NONE, TLS or SSL"
+ 	),
+ 	AP_INIT_TAKE1(
+ 		"AuthzLDAPBindDN", ap_set_string_slot,
+diff -rN -u mod_authz_ldap-0.30.old/module/utilities.c mod_authz_ldap-0.30/module/utilities.c
+--- mod_authz_ldap-0.30.old/module/utilities.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/utilities.c	2012-04-26 14:54:43.000000000 +0200
+@@ -52,12 +52,15 @@
+ 		server = "localhost";
+ 	else
+ 		server = apr_pstrdup(r->pool, sec->server);
+-	pport = strchr(server, ':');
+-	if (pport) {
+-		port = atoi(pport + 1);
+-		*pport = '\0';
+-	} else
++
++	if (sec->trusted_mode == APR_LDAP_SSL) {
++		port = LDAPS_PORT;
++	} else {
+ 		port = LDAP_PORT;
++	}
++	// note: util_ldap_connection_find honors the port, but util_ldap_connection_open actually ignores it.
++	// instead, the 'server' argument should include :<port>, or else default ports (as above) are used.
++	// (we could actually give a list of servers, like "<host1>[:port] <host2>[:port] ...")
+ 	ldc = util_ldap_connection_find(r, server, port, binddn, bindpw,
+ 			always, sec->trusted_mode);
+ 

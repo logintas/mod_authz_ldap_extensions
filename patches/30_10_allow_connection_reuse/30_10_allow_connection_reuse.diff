@@ -1,0 +1,257 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/auth.c mod_authz_ldap-0.30/module/auth.c
+--- mod_authz_ldap-0.30.old/module/auth.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/auth.c	2012-04-26 14:54:43.000000000 +0200
+@@ -221,13 +221,13 @@
+ 	ldc = authz_util_ldap_connection_find(sec, r, dn, pw);
+ 
+ 	/* make sure an existing connection is unbound to force re-binding */
+-	authz_util_ldap_connection_unbind(sec, ldc);
++	authz_util_ldap_connection_unbind(sec, r, ldc);
+ 
+ 	/* check the password by binding against the directory		*/
+ 	res = authz_util_ldap_connection_bind(sec, r, ldc);
+ 
+ 	/* release the connection */
+-	authz_util_ldap_connection_unbind(sec, ldc);
++	authz_util_ldap_connection_unbind(sec, r, ldc);
+ 
+ 	if (res != LDAP_SUCCESS) {
+ 		if (sec->loglevel >= APLOG_ERR)
+@@ -298,16 +298,14 @@
+ 
+ 	/* if this is the first call to the authentication function	*/
+ 	/* we have to establish an ldap connection			*/
+-	if (sec->ldc == NULL) {
+-		if (OK != authz_ldap_connect(sec, r)) {
+-			if (sec->loglevel >= APLOG_CRIT)
+-			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0,
+-				r,
+-				"[%d] no ldap connection", (int)getpid());
+-			goto auth_end;
+-		}
+-		AUTHZ_RDEBUG("[%d] LDAP connection established", (int)getpid());
++	if (OK != authz_ldap_connect(sec, r)) {
++		if (sec->loglevel >= APLOG_CRIT)
++		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0,
++			r,
++			"[%d] no ldap connection", (int)getpid());
++		goto auth_end;
+ 	}
++	AUTHZ_RDEBUG("[%d] LDAP connection established", (int)getpid());
+ 
+ 	/* map the user from the certificate if configured to do so	*/
+ 	if (sec->method & AUTHMETHOD_CERT) {
+@@ -377,19 +375,14 @@
+ 
+ 	/* we don't support caching anymore (DEPRECATED by mod_ldap)	*/
+ 
+-	/* clean up connection of necessary				*/
+-	authz_ldap_unbind(sec, r);
+-	/*
+-	if ((!sec->cacheconnection) && (NULL != sec->ldc)) {
+-		if (LDAP_SUCCESS != (res = authz_ldap_unbind(sec, sec->ldap))) {
+-			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-				"[%d] problem during LDAP unbind: %d",
+-				(int)getpid(), res);
+-		}
+-		sec->ldc->ldap = NULL;
+-		sec->ldc = NULL;
++	/* unbind connection if necessary				*/
++	if (!sec->cacheconnection) {
++		AUTHZ_RDEBUG("[%d] unbind ldap connection", (int)getpid());
++		authz_ldap_unbind(sec, r);
++	} else {
++		AUTHZ_RDEBUG("[%d] close ldap connection", (int)getpid());
++		authz_ldap_close(sec, r);
+ 	}
+-	*/
+ 
+ 	if (rc == OK)
+ 		initial_authenticated = 1;
+diff -rN -u mod_authz_ldap-0.30.old/module/authz.c mod_authz_ldap-0.30/module/authz.c
+--- mod_authz_ldap-0.30.old/module/authz.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/authz.c	2012-04-26 14:54:43.000000000 +0200
+@@ -395,15 +395,13 @@
+ 		(int)getpid(), user, r->uri);
+ 
+ 	/* make sure we have an LDAP connection				*/
+-	if (sec->ldc == NULL) {
+-		if (OK != authz_ldap_connect(sec, r)) {
+-			if (sec->loglevel >= APLOG_CRIT)
+-			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0, r,
+-				"[%d] no ldap connection", (int)getpid());
+-			goto authz_end;
+-		}
+-		AUTHZ_RDEBUG("[%d] LDAP connection established", (int)getpid());
++	if (OK != authz_ldap_connect(sec, r)) {
++		if (sec->loglevel >= APLOG_CRIT)
++		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0, r,
++			"[%d] no ldap connection", (int)getpid());
++		goto authz_end;
+ 	}
++	AUTHZ_RDEBUG("[%d] LDAP connection established", (int)getpid());
+ 
+ 	/* get the requirement array					*/
+ 	authz_requires = ap_requires(r);
+@@ -613,19 +611,15 @@
+ 
+ 	/* we don't support caching anymore (DEPRECATED by mod_ldap)	*/
+ 
+-	/* clean up connection of necessary				*/
+-	authz_ldap_unbind(sec, r);
+-	/*
+-	if ((NULL != sec->ldc) && (!sec->cacheconnection)) {
+-		if (LDAP_SUCCESS != (res = authz_ldap_unbind(sec, sec->ldap))) {
+-			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-				"[%d] problem during LDAP unbind: %d",
+-				(int)getpid(), res);
+-		}
+-		sec->ldc->ldap = NULL;
+-		sec->ldc = NULL;
++	/* unbind connection if necessary				*/
++	if (!sec->cacheconnection) {
++		AUTHZ_RDEBUG("[%d] unbind ldap connection", (int)getpid());
++		authz_ldap_unbind(sec, r);
++	} else {
++		AUTHZ_RDEBUG("[%d] close ldap connection", (int)getpid());
++		authz_ldap_close(sec, r);
+ 	}
+-	*/
++
+ END_TIME("authz_ldap_authz()");
+ 	AUTHZ_RDEBUG("[%d] return code from authz_ldap_authz: %s (%d)",
+ 		(int)getpid(), (rc) ? "NOK" : "OK", rc);
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.c mod_authz_ldap-0.30/module/mod_authz_ldap.c
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.c	2012-04-26 14:54:43.000000000 +0200
+@@ -27,11 +27,13 @@
+ **************************************************************************
+ ** util_ldap_connection_find	find an available connection
+ ** util_ldap_connection_open	open a connection and bind
++** util_ldap_connection_close	release a connection, but don't unbind
+ ** util_ldap_connection_unbind	unbind
+ */
+ 
+ APR_OPTIONAL_FN_TYPE(uldap_connection_find) *util_ldap_connection_find;
+ APR_OPTIONAL_FN_TYPE(uldap_connection_open) *util_ldap_connection_open;
++APR_OPTIONAL_FN_TYPE(uldap_connection_close) *util_ldap_connection_close;
+ APR_OPTIONAL_FN_TYPE(uldap_connection_unbind) *util_ldap_connection_unbind;
+ 
+ /* registered in authz_ldap_register_hooks 						*/
+@@ -43,9 +45,11 @@
+ 	 */
+ 	util_ldap_connection_find   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_find);
+ 	util_ldap_connection_open   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_open);
++	util_ldap_connection_close   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_close);
+ 	util_ldap_connection_unbind   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_unbind);
+ 
+ 	if (util_ldap_connection_find == NULL || util_ldap_connection_open == NULL ||
++			util_ldap_connection_close == NULL ||
+ 			util_ldap_connection_unbind == NULL) {
+ 
+ 		ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.h mod_authz_ldap-0.30/module/mod_authz_ldap.h
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.h	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.h	2012-04-26 14:54:43.000000000 +0200
+@@ -227,7 +227,7 @@
+ /* utility function: connect to the ldap server when required		*/
+ extern util_ldap_connection_t	*authz_util_ldap_connection_find(authz_ldap_config_rec *sec, request_rec *r, const char *binddn, const char *bindpw);
+ extern int			authz_util_ldap_connection_bind(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc);
+-extern apr_status_t		authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, util_ldap_connection_t *ldc);
++extern apr_status_t		authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc);
+ 
+ extern int	authz_ldap_unbind(authz_ldap_config_rec *sec, request_rec *r);
+ extern int	authz_ldap_connect(authz_ldap_config_rec *sec, request_rec *r);
+diff -rN -u mod_authz_ldap-0.30.old/module/utilities.c mod_authz_ldap-0.30/module/utilities.c
+--- mod_authz_ldap-0.30.old/module/utilities.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/utilities.c	2012-04-26 14:54:43.000000000 +0200
+@@ -16,11 +16,13 @@
+ **************************************************************************
+ ** util_ldap_connection_find	find an available connection
+ ** util_ldap_connection_open	open a connection and bind
++** util_ldap_connection_close	release a connection (but don't unbind)
+ ** util_ldap_connection_unbind	unbind
+ */
+ 
+ extern APR_OPTIONAL_FN_TYPE(uldap_connection_find) *util_ldap_connection_find;
+ extern APR_OPTIONAL_FN_TYPE(uldap_connection_open) *util_ldap_connection_open;
++extern APR_OPTIONAL_FN_TYPE(uldap_connection_close) *util_ldap_connection_close;
+ extern APR_OPTIONAL_FN_TYPE(uldap_connection_unbind) *util_ldap_connection_unbind;
+ 
+ struct tms	starttms, endtms;
+@@ -33,6 +35,7 @@
+ ** authz_util_ldap_connection_bind	bind (specific connection)
+ ** authz_util_ldap_connection_unbind	unbind (specific connection)
+ ** authz_ldap_connect			connect to the directory and bind (default connection)
++** authz_ldap_close			release a connection, but don't unbind (default connection)
+ ** authz_ldap_unbind			unbind, close connection (default connection)
+ ** authz_ldap_reconnect			reestablish the connection to the directory (default connection)
+ ** authz_ldap_search			actually perform a search (default connection)
+@@ -72,14 +75,23 @@
+ 	return util_ldap_connection_open(r, ldc);	
+ }
+ 
++/* utility function: bind (specific connection)				*/
++/*void authz_util_ldap_connection_close(authz_ldap_config_rec *sec, util_ldap_connection_t *ldc) {*/
++void authz_util_ldap_connection_close(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc) {
++	// util_ldap_connection_close doesn't check for ldc == NULL
++	if (ldc) {
++		util_ldap_connection_close(ldc);	
++	}
++}
++
+ /* utility function: unbind (specific connection)			*/
+-apr_status_t authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, util_ldap_connection_t *ldc) {
++apr_status_t authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc) {
+ 	return util_ldap_connection_unbind(ldc);
+ }
+ 
+ /* utility function: unbind, close connection (default connection)	*/
+ int	authz_ldap_unbind(authz_ldap_config_rec *sec, request_rec *r) {
+-	authz_util_ldap_connection_unbind(sec, sec->ldc);
++	authz_util_ldap_connection_unbind(sec, r, sec->ldc);
+ 	sec->ldc = NULL;
+ 
+ 	/* always return LDAP_SUCCESS, since authz_util_ldap_connection_unbind	*/
+@@ -93,15 +105,14 @@
+ 	int			rc;
+ 	
+ 	/* nothing to do if we already have a connection to the server	*/
+-	if (sec->ldc) {
++	if (sec->ldc && sec->ldc->ldap) {
+ 		AUTHZ_RDEBUG("[%d] ldap connection already established",
+ 			(int)getpid());
+ 		return OK;
+ 	}
+ 
+-	/* inv: sec-ldap == NULL					*/
+-
+-	/* we need our separate connection 				*/
++	/* re-find ldc */
++	sec->ldc = NULL;
+ 	ldc = authz_util_ldap_connection_find(sec, r, sec->binddn, sec->bindpw);
+ 
+ 	/* connect and bind */
+@@ -129,7 +140,7 @@
+ /* This shouldn't be necessary, as the LDAP library is supposed to 	*/
+ /* handle this case							*/
+ int	authz_ldap_reconnect(authz_ldap_config_rec *sec, request_rec *r) {
+-	
++
+ 	AUTHZ_RDEBUG("[%d] LDAP reconnect", (int)getpid());
+ 
+ 	/* force closing of the connection, free of resources		*/
+@@ -139,6 +150,13 @@
+ 	return authz_ldap_connect(sec, r);
+ }
+ 
++/* close current connection, but don't unbind (i. e. give coonnection free in a threaded environment,	*/
++/* which we don't yet support... But mod_ldap supports it.)						*/
++/* if we use _close instead of _unbind, we can save a lot of bind/unbind operations			*/
++void	authz_ldap_close(authz_ldap_config_rec *sec, request_rec *r) {
++	authz_util_ldap_connection_close(sec, r, sec->ldc);
++}
++
+ /* Perform an LDAP search, this may fail if the connection has gone	*/
+ /* away or was never established. In these cases, reestablish the	*/
+ /* connection.								*/

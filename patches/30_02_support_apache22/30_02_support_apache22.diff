@@ -1,0 +1,17 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.c mod_authz_ldap-0.30/module/mod_authz_ldap.c
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.c	2010-02-04 22:17:52.000000000 +0100
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.c	2012-04-26 14:54:42.000000000 +0200
+@@ -30,7 +30,13 @@
+ 
+ static void	authz_ldap_register_hooks(apr_pool_t *p) {
+ 	static const char	*aszPre[] = { "mod_ssl.c", NULL };
++/* Apache < 2.2 */
++/*
+ 	static const char	*aszSucc[] = { "mod_auth.c", NULL };
++ */
++/* Apache 2.2 */
++	static const char	*aszSucc[] = { "mod_auth_basic.c", NULL };
++
+ 	ap_hook_check_user_id(authz_ldap_auth, aszPre, aszSucc,
+ 		APR_HOOK_MIDDLE);
+ 	ap_hook_auth_checker(authz_ldap_authz, aszPre, aszSucc,

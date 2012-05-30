@@ -1,0 +1,655 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/age.c mod_authz_ldap-0.30/module/age.c
+--- mod_authz_ldap-0.30.old/module/age.c	2010-02-06 10:24:18.000000000 +0100
++++ mod_authz_ldap-0.30/module/age.c	2012-04-26 14:54:42.000000000 +0200
+@@ -62,7 +62,7 @@
+ 
+ 	/* if we get exactly one entry back, then the search and the	*/
+ 	/* age condition were satisified				*/
+-	nentries = ldap_count_entries(sec->ldap, result);
++	nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result);
+ 	ldap_msgfree(result);
+ 	if (1 != nentries) {
+ 		AUTHZ_RDEBUG("[%d] search for last mod returns wrong number of "
+diff -rN -u mod_authz_ldap-0.30.old/module/auth.c mod_authz_ldap-0.30/module/auth.c
+--- mod_authz_ldap-0.30.old/module/auth.c	2012-04-26 14:52:01.000000000 +0200
++++ mod_authz_ldap-0.30/module/auth.c	2012-04-26 14:54:42.000000000 +0200
+@@ -24,7 +24,7 @@
+ int	authz_ldap_authenticate(authz_ldap_config_rec *sec, request_rec *r,
+ 		const char *userdn) {
+ 	char	dn[MAX_STRING_LEN];
+-	LDAP			*ldap = NULL;
++	util_ldap_connection_t	*ldc = NULL;
+ 	char			*pw = NULL, *dnp, *newname = NULL;
+ 	LDAPMessage		*result, *e;
+ 	int			nentries, res;
+@@ -90,7 +90,7 @@
+ 		AUTHZ_RDEBUG("[%d] query succeeded", (int)getpid());
+ 
+ 		/* user should be unique, or we must decline authent.	*/
+-		if ((nentries = ldap_count_entries(sec->ldap, result)) != 1) {
++		if ((nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result)) != 1) {
+ 			ldap_msgfree(result);
+ 			if (sec->loglevel >= APLOG_ERR)
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+@@ -103,15 +103,15 @@
+ 		}
+ 
+ 		/* get the distinguished name of the node found		*/
+-		e = ldap_first_entry(sec->ldap, result);
+-		dnp = ldap_get_dn(sec->ldap, e);
++		e = ldap_first_entry(SEC_LDC_LDAP(sec->ldc), result);
++		dnp = ldap_get_dn(SEC_LDC_LDAP(sec->ldc), e);
+ 		strcpy(dn, dnp);
+ 		AUTHZ_RDEBUG("[%d] query returns %s", (int)getpid(), dn);
+ 		ldap_memfree(dnp);
+ 
+ 		/* if using the mapping, retrieve the map name		*/
+ 		if (sec->mapusertoattr) {
+-			vals = ldap_get_values(sec->ldap, e,
++			vals = ldap_get_values(SEC_LDC_LDAP(sec->ldc), e,
+ 				sec->mapusertoattr);
+ 			if (vals != NULL) {
+ 				int l = strlen(vals[0]);
+@@ -164,28 +164,17 @@
+ 	}
+ 
+ 	/* we need our separate connection 				*/
+-	ldap = authz_ldap_init(sec, r);
+-	if (ldap == NULL) {
+-		if (sec->loglevel >= APLOG_ERR)
+-		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-			"[%d] cannot establish ldap connection", (int)getpid());
+-		ap_note_basic_auth_failure(r);
+-		return HTTP_UNAUTHORIZED;
+-	}
++	ldc = authz_util_ldap_connection_find(sec, r, dn, pw);
+ 
+-	/* set LDAP version 3 protocol options				*/
+-	if (LDAP_OPT_SUCCESS != ldap_set_option(ldap, LDAP_OPT_PROTOCOL_VERSION,
+-		&version)) {
+-		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-			"[%d] cannot set the protocol version", (int)getpid());
+-	} else {
+-		AUTHZ_RDEBUG("[%d] protocol version set to %d", (int)getpid(),
+-			version);
+-	}
++	/* make sure an existing connection is unbound to force re-binding */
++	authz_util_ldap_connection_unbind(sec, ldc);
+ 
+ 	/* check the password by binding against the directory		*/
+-	res =ldap_simple_bind_s(ldap, dn, pw);
+-	authz_ldap_unbind(sec, ldap);
++	res = authz_util_ldap_connection_bind(sec, r, ldc);
++
++	/* release the connection */
++	authz_util_ldap_connection_unbind(sec, ldc);
++
+ 	if (res != LDAP_SUCCESS) {
+ 		if (sec->loglevel >= APLOG_ERR)
+ 		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+@@ -255,7 +244,7 @@
+ 
+ 	/* if this is the first call to the authentication function	*/
+ 	/* we have to establish an ldap connection			*/
+-	if (sec->ldap == NULL) {
++	if (sec->ldc == NULL) {
+ 		if (OK != authz_ldap_connect(sec, r)) {
+ 			if (sec->loglevel >= APLOG_CRIT)
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0,
+@@ -332,15 +321,22 @@
+ 	AUTHZ_RDEBUG("[%d] leaving authz_ldap_auth with %d/%s", (int)getpid(),
+ 		rc, (rc == 0) ? "OK" : "NOK");
+ 
++	/* we don't support caching anymore (DEPRECATED by mod_ldap)	*/
++
+ 	/* clean up connection of necessary				*/
+-	if ((!sec->cacheconnection) && (NULL != sec->ldap)) {
++	authz_ldap_unbind(sec, r);
++	/*
++	if ((!sec->cacheconnection) && (NULL != sec->ldc)) {
+ 		if (LDAP_SUCCESS != (res = authz_ldap_unbind(sec, sec->ldap))) {
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+ 				"[%d] problem during LDAP unbind: %d",
+ 				(int)getpid(), res);
+ 		}
+-		sec->ldap = NULL;
++		sec->ldc->ldap = NULL;
++		sec->ldc = NULL;
+ 	}
++	*/
++
+ 	if (rc == OK)
+ 		initial_authenticated = 1;
+ 	return rc;
+diff -rN -u mod_authz_ldap-0.30.old/module/authz.c mod_authz_ldap-0.30/module/authz.c
+--- mod_authz_ldap-0.30.old/module/authz.c	2010-02-06 10:24:18.000000000 +0100
++++ mod_authz_ldap-0.30/module/authz.c	2012-04-26 14:54:42.000000000 +0200
+@@ -54,7 +54,7 @@
+ 
+ 	/* if we get exactly one entry back, then the search was 	*/
+ 	/* satisified							*/
+-	nentries = ldap_count_entries(sec->ldap, result);
++	nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result);
+ 	ldap_msgfree(result);
+ 	if (0 == nentries) {
+ 		AUTHZ_RDEBUG("[%d] search for filter returns no "
+@@ -155,7 +155,7 @@
+ 			(int)getpid(), rc);
+ 		return 0;
+ 	}
+-	nentries = ldap_count_entries(sec->ldap, result);
++	nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result);
+ 	ldap_msgfree(result);
+ 	if (nentries != 1) {
+ 		AUTHZ_RDEBUG("[%d] authz_ldap_search returns %d entries",
+@@ -339,7 +339,7 @@
+ 	}
+ 
+ 	/* find the number of matching entries				*/
+-	nentries = ldap_count_entries(sec->ldap, result);
++	nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result);
+ 	ldap_msgfree(result);
+ 	if (nentries > 0) {
+ 		AUTHZ_RDEBUG("[%d] file '%s' is in a secondary group of %s",
+@@ -395,7 +395,7 @@
+ 		(int)getpid(), user, r->uri);
+ 
+ 	/* make sure we have an LDAP connection				*/
+-	if (sec->ldap == NULL) {
++	if (sec->ldc == NULL) {
+ 		if (OK != authz_ldap_connect(sec, r)) {
+ 			if (sec->loglevel >= APLOG_CRIT)
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_CRIT, 0, r,
+@@ -610,15 +610,23 @@
+ 	/* if we get to this point, then an eventual age requirement	*/
+ 	/* was satisfied, and if some other requirement was ok, rc	*/
+ 	/* reflects this fact						*/
+-	if ((NULL != sec->ldap) && (!sec->cacheconnection)) {
++
++	/* we don't support caching anymore (DEPRECATED by mod_ldap)	*/
++
++	/* clean up connection of necessary				*/
++	authz_ldap_unbind(sec, r);
++	/*
++	if ((NULL != sec->ldc) && (!sec->cacheconnection)) {
+ 		if (LDAP_SUCCESS != (res = authz_ldap_unbind(sec, sec->ldap))) {
+ 			ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+ 				"[%d] problem during LDAP unbind: %d",
+ 				(int)getpid(), res);
+ 		}
+-		sec->ldap = NULL;
++		sec->ldc->ldap = NULL;
++		sec->ldc = NULL;
+ 	}
+-	END_TIME("authz_ldap_authz()");
++	*/
++END_TIME("authz_ldap_authz()");
+ 	AUTHZ_RDEBUG("[%d] return code from authz_ldap_authz: %s (%d)",
+ 		(int)getpid(), (rc) ? "NOK" : "OK", rc);
+ 	if (rc == OK) {
+diff -rN -u mod_authz_ldap-0.30.old/module/certmap.c mod_authz_ldap-0.30/module/certmap.c
+--- mod_authz_ldap-0.30.old/module/certmap.c	2012-04-26 14:52:01.000000000 +0200
++++ mod_authz_ldap-0.30/module/certmap.c	2012-04-26 14:54:42.000000000 +0200
+@@ -537,7 +537,7 @@
+ 	}
+ 
+ 	/* make sure the number of entries is exactly 1			*/
+-	nentries = ldap_count_entries(sec->ldap, result);
++	nentries = ldap_count_entries(SEC_LDC_LDAP(sec->ldc), result);
+ 	if (nentries == 0) {
+ 		ldap_msgfree(result);
+ 		if (sec->loglevel >= APLOG_ERR)
+@@ -560,12 +560,12 @@
+ 	/* get the attribute value for the owner attribute		*/
+ 	dn[0] = '\0';
+ 	newname[0] = '\0';
+-	e = ldap_first_entry(sec->ldap, result);
++	e = ldap_first_entry(SEC_LDC_LDAP(sec->ldc), result);
+ 	if (e != NULL) {
+ 		if (AUTHMAPMETHOD_RETURNSUSER(sec->mapmethod)) {
+ 			/* retrieve the DN from the user		*/
+ 			char	*d;
+-			d = ldap_get_dn(sec->ldap, e);
++			d = ldap_get_dn(SEC_LDC_LDAP(sec->ldc), e);
+ 			apr_cpystrn(dn, d, MAX_STRING_LEN);
+ 			ldap_memfree(d);
+ 			authz_ldap_set_userdn(sec, r, dn);
+@@ -576,7 +576,7 @@
+ 			/* then there should be an attribute with that	*/
+ 			/* value					*/
+ 			if (sec->mapusertoattr) {
+-				vals = ldap_get_values(sec->ldap, e,
++				vals = ldap_get_values(SEC_LDC_LDAP(sec->ldc), e,
+ 						       sec->mapusertoattr);
+ 				if (vals != NULL) {
+ 					apr_cpystrn(newname, vals[0],
+@@ -593,9 +593,9 @@
+ 		} else {
+ 			/* map method does not return a user, so we 	*/
+ 			/* we have to go after the owner attribute	*/
+-			attr = ldap_first_attribute(sec->ldap, e, &ber);
++			attr = ldap_first_attribute(SEC_LDC_LDAP(sec->ldc), e, &ber);
+ 			if (attr != NULL) {
+-				vals = ldap_get_values(sec->ldap, e, attr);
++				vals = ldap_get_values(SEC_LDC_LDAP(sec->ldc), e, attr);
+ 				if (vals != NULL) {
+ 					apr_cpystrn(dn, vals[0], MAX_STRING_LEN);
+ 					ldap_value_free(vals);
+@@ -606,7 +606,7 @@
+ 						AUTHZ_RDEBUG("[%d] fetching map attribute [%s]",
+ 							(int)getpid(), sec->mapusertoattr );
+ 
+-						vals = ldap_get_values(sec->ldap, e,
++						vals = ldap_get_values(SEC_LDC_LDAP(sec->ldc), e,
+ 							sec->mapusertoattr);
+ 						if (vals != NULL) {
+ 							apr_cpystrn(newname, vals[0], MAX_STRING_LEN);
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.c mod_authz_ldap-0.30/module/mod_authz_ldap.c
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.c	2012-04-26 14:54:42.000000000 +0200
+@@ -23,6 +23,40 @@
+ #include "mod_authz_ldap.h"
+ 
+ /*************************************************************************
++** mod_ldap functions							**
++**************************************************************************
++** util_ldap_connection_find	find an available connection
++** util_ldap_connection_open	open a connection and bind
++** util_ldap_connection_unbind	unbind
++*/
++
++APR_OPTIONAL_FN_TYPE(uldap_connection_find) *util_ldap_connection_find;
++APR_OPTIONAL_FN_TYPE(uldap_connection_open) *util_ldap_connection_open;
++APR_OPTIONAL_FN_TYPE(uldap_connection_unbind) *util_ldap_connection_unbind;
++
++/* registered in authz_ldap_register_hooks 						*/
++static int authz_ldap_post_config(apr_pool_t *p, apr_pool_t *plog, apr_pool_t *ptemp, server_rec *s) {
++	/* Get optional functions
++	 * We retreive them here  and not in the hook optional_fn_retrieve to be able to
++	 * return an error if one of the functions could not be retrieved, e. e. mod_ldap
++	 * is not available.
++	 */
++	util_ldap_connection_find   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_find);
++	util_ldap_connection_open   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_open);
++	util_ldap_connection_unbind   = APR_RETRIEVE_OPTIONAL_FN(uldap_connection_unbind);
++
++	if (util_ldap_connection_find == NULL || util_ldap_connection_open == NULL ||
++			util_ldap_connection_unbind == NULL) {
++
++		ap_log_error(APLOG_MARK, APLOG_ERR, 0, s,
++                     "[%d] mod_ldap is not available, required by mod_authz_ldap", (int)getpid());
++		return HTTP_INTERNAL_SERVER_ERROR;
++	}
++
++	return OK;
++}
++
++/*************************************************************************
+ ** Module Record							**
+ *************************************************************************/
+ 
+@@ -41,6 +75,9 @@
+ 		APR_HOOK_MIDDLE);
+ 	ap_hook_auth_checker(authz_ldap_authz, aszPre, aszSucc,
+ 		APR_HOOK_MIDDLE);
++
++	ap_hook_post_config(authz_ldap_post_config, NULL, NULL,
++		APR_HOOK_MIDDLE);
+ }
+ 
+ module AP_MODULE_DECLARE_DATA authz_ldap_module = {
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.h mod_authz_ldap-0.30/module/mod_authz_ldap.h
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.h	2010-10-21 12:25:12.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.h	2012-04-26 14:54:42.000000000 +0200
+@@ -23,15 +23,12 @@
+ #ifdef HAVE_LBER_H
+ #include <lber.h>
+ #endif
+-#ifdef HAVE_LDAP_H
+-#include <ldap.h>
++#ifdef HAVE_SYS_TIMES_H
++#include <sys/times.h>
+ #endif
+ #ifdef HAVE_SYS_TYPES_H
+ #include <sys/types.h>
+ #endif
+-#ifdef HAVE_SYS_TIMES_H
+-#include <sys/times.h>
+-#endif
+ #ifdef HAVE_SYS_TIME_H
+ #include <sys/time.h>
+ #endif
+@@ -45,6 +42,9 @@
+ #include <sys/stat.h>
+ #endif
+ 
++/* mod_ldap */
++#include "util_ldap.h"
++
+ #ifndef HAVE_BER_FREE
+ #define	ber_free	free
+ #endif
+@@ -89,13 +89,14 @@
+ 	/* whether or not to be active					*/
+ 	int	method;		/* AuthzLDAPMethod			*/
+ 	int	mapmethod;	/* AuthzLDAPMapMethod			*/
+-	int	cacheconnection;/* AuthzLDAPCacheConnection		*/
++	int	cacheconnection;/* AuthzLDAPCacheConnection		*/	/* DEPRECATED by mod_ldap	*/
+ 
+ 	/* server connections for ldap lookups				*/
+ 	char	*server;	/* AuthzLDAPServer			*/
++	int	trusted_mode;	/* AuthzLDAPTrustedMode			*/	/* NEW by mod_ldap		*/
+ 	char	*binddn;	/* AuthzLDAPBindDN			*/
+ 	char	*bindpw;	/* AuthzLDAPBindPassword		*/
+-	int	ldapversion;	/* AuthzLDAPProtocolVersion		*/
++	int	ldapversion;	/* AuthzLDAPProtocolVersion		*/	/* DEPRECATED by mod_ldap	*/
+ 
+ 	/* User settings						*/
+ 	char	*userbase;	/* AuthzLDAPUserBase			*/
+@@ -132,7 +133,7 @@
+ 	int	loglevel;	/* AuthzLDAPLogLevel			*/
+ 
+ 	/* run time data structures per server process			*/
+-	LDAP	*ldap;		/* pointer to active ldap connection	*/
++	util_ldap_connection_t	*ldc;	/* pointer to active ldap connection	*/
+ } authz_ldap_config_rec;
+ 
+ /*
+@@ -193,6 +194,9 @@
+ 
+ extern const command_rec	authz_ldap_cmds[];
+ 
++/* macro to access sec->ldc->ldap avoiding NULL pointers		*/
++#define SEC_LDC_LDAP(sec_ldc)	(sec_ldc ? sec_ldc->ldap : NULL)
++
+ /*************************************************************************
+ ** declarations from modconf.c						**
+ *************************************************************************/
+@@ -216,8 +220,11 @@
+  */
+ 
+ /* utility function: connect to the ldap server when required		*/
+-extern LDAP	*authz_ldap_init(authz_ldap_config_rec *sec, request_rec *r);
+-extern int	authz_ldap_unbind(authz_ldap_config_rec *sec, LDAP *l);
++extern util_ldap_connection_t	*authz_util_ldap_connection_find(authz_ldap_config_rec *sec, request_rec *r, const char *binddn, const char *bindpw);
++extern int			authz_util_ldap_connection_bind(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc);
++extern apr_status_t		authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, util_ldap_connection_t *ldc);
++
++extern int	authz_ldap_unbind(authz_ldap_config_rec *sec, request_rec *r);
+ extern int	authz_ldap_connect(authz_ldap_config_rec *sec, request_rec *r);
+ extern int	authz_ldap_reconnect(authz_ldap_config_rec *sec, request_rec *r);
+ extern int	authz_ldap_search(authz_ldap_config_rec *sec, request_rec *r,
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:54:42.000000000 +0200
+@@ -247,6 +247,26 @@
+ 	}       
+ 	return "unknown group attribute field combination";
+ }
++ 
++static const char	*authz_ldap_set_trusted_mode_slot(cmd_parms *parms,
++	void *mconfig, const char *arg){
++	authz_ldap_config_rec	*sec;
++	sec = (authz_ldap_config_rec *)mconfig;
++
++	AUTHZ_DEBUG("setting trusted mode at %p to '%s'\n", parms->server,
++		(void *)sec, (arg) ? arg : "(null)");
++
++	sec->trusted_mode = APR_LDAP_NONE;
++	if (0 == strcasecmp(arg, "none")) {
++		sec->trusted_mode = APR_LDAP_NONE;
++		return NULL;
++	}
++	if ((0 == strcasecmp(arg, "tls")) || (0 == strcasecmp(arg, "starttls"))) {
++		sec->trusted_mode = APR_LDAP_STARTTLS;
++		return NULL;
++	}
++	return "unknown trusted mode";
++}
+ 
+ /* Configuration Directives for this module				*/
+ const command_rec	authz_ldap_cmds[] = {
+@@ -281,6 +301,13 @@
+ 		OR_AUTHCFG,
+ 		"Name of LDAP Server that should be queried"
+ 	),
++	/* whether to use TLS or not					*/
++	AP_INIT_TAKE1(
++		"AuthzLDAPTrustedMode", authz_ldap_set_trusted_mode_slot,
++		(void *)APR_OFFSETOF(authz_ldap_config_rec, trusted_mode),
++		OR_AUTHCFG,
++		"Trusted mode to use: NONE or TLS"
++	),
+ 	AP_INIT_TAKE1(
+ 		"AuthzLDAPBindDN", ap_set_string_slot,
+ 		(void *)APR_OFFSETOF(authz_ldap_config_rec, binddn),
+@@ -446,6 +473,7 @@
+ 
+ 		/* global configuration information			*/
+ 		sec->server = NULL;
++		sec->trusted_mode = APR_LDAP_NONE;
+ 		sec->binddn = NULL;
+ 		sec->bindpw = NULL;
+ #ifdef LDAP_VERSION3
+@@ -491,7 +519,7 @@
+ 		sec->loglevel = APLOG_DEBUG;
+ 
+ 		/* private data						*/
+-		sec->ldap = NULL;
++		sec->ldc = NULL;
+ 	}
+ 	return sec;
+ }
+@@ -507,6 +535,7 @@
+ 	/* all values that were not set in the child but are set in the	*/
+ 	/* parent are linked						*/
+ 	authz_ldap_link(server);
++	authz_ldap_link(trusted_mode);
+ 	authz_ldap_link(binddn);
+ 	authz_ldap_link(bindpw);
+ 
+@@ -522,7 +551,7 @@
+ 
+ 	/* connections possibly cached from previous calls should be	*/
+ 	/* restored							*/
+-	authz_ldap_link(ldap);
++	authz_ldap_link(ldc);
+ 
+ 	/* the integers cannot possibly be merged, as we cannot decide	*/
+ 	/* from the values in the child structure whether they are 	*/
+diff -rN -u mod_authz_ldap-0.30.old/module/utilities.c mod_authz_ldap-0.30/module/utilities.c
+--- mod_authz_ldap-0.30.old/module/utilities.c	2010-02-17 18:52:43.000000000 +0100
++++ mod_authz_ldap-0.30/module/utilities.c	2012-04-26 14:54:42.000000000 +0200
+@@ -11,27 +11,41 @@
+ */ 
+ #include "mod_authz_ldap.h"
+ 
++/*************************************************************************
++** mod_ldap functions (implemented in mod_authz_ldap.c)			**
++**************************************************************************
++** util_ldap_connection_find	find an available connection
++** util_ldap_connection_open	open a connection and bind
++** util_ldap_connection_unbind	unbind
++*/
++
++extern APR_OPTIONAL_FN_TYPE(uldap_connection_find) *util_ldap_connection_find;
++extern APR_OPTIONAL_FN_TYPE(uldap_connection_open) *util_ldap_connection_open;
++extern APR_OPTIONAL_FN_TYPE(uldap_connection_unbind) *util_ldap_connection_unbind;
++
+ struct tms	starttms, endtms;
+ struct timeval	starttv, endtv;
+ 
+ /*************************************************************************
+ ** Utility functions to handle the connection to the LDAP server	**
+ **************************************************************************
+-** authz_ldap_init	initialize the connection, but don't connect yet
+-** authz_ldap_unbind	free the connection to the directory
+-** authz_ldap_connect	connect to the directory, without binding
+-** authz_ldap_reconnect	reestablish the connection to the directory
+-** authz_ldap_search	actually perform a search
++** authz_util_ldap_connection_find	get an available connection (specifc connection)
++** authz_util_ldap_connection_bind	bind (specific connection)
++** authz_util_ldap_connection_unbind	unbind (specific connection)
++** authz_ldap_connect			connect to the directory and bind (default connection)
++** authz_ldap_unbind			unbind, close connection (default connection)
++** authz_ldap_reconnect			reestablish the connection to the directory (default connection)
++** authz_ldap_search			actually perform a search (default connection)
+ */
+ 
+-/* utility function: connect to the ldap server when required		*/
+-LDAP	*authz_ldap_init(authz_ldap_config_rec *sec, request_rec *r) {
++/* utility function: get an available connection (specific connection)	*/
++util_ldap_connection_t	*authz_util_ldap_connection_find(authz_ldap_config_rec *sec, request_rec *r, const char *binddn, const char *bindpw) {
+ 	char			*server, *pport;
+ 	int			port;
+-	LDAP			*result = NULL;
++	util_ldap_connection_t	*ldc = NULL;
+ 	
+ 	/* log initialization of LDAP connection			*/
+-	AUTHZ_RDEBUG("[%d] initialize LDAP connection", (int)getpid());
++	AUTHZ_RDEBUG("[%d] prepare LDAP connection", (int)getpid());
+ 
+ 	/* parse servername and port from the configuration		*/
+ 	if (!(sec->server))
+@@ -44,70 +58,67 @@
+ 		*pport = '\0';
+ 	} else
+ 		port = LDAP_PORT;
+-	result = ldap_init(server, port);
+-	if (NULL == result) {
+-		if (sec->loglevel >= APLOG_EMERG)
+-		ap_log_rerror(APLOG_MARK, APLOG_EMERG, 0, r,
+-			"cannot open LDAP "
+-			"[%d] connection to host %s, port %d", (int)getpid(),
+-			server, port);
+-	} else {
+-		AUTHZ_RDEBUG("[%d] got ldap connection to %s:%d at 0x%08x",
+-			(int)getpid(), server, port, (unsigned int)result);
+-	}
++	ldc = util_ldap_connection_find(r, server, port, binddn, bindpw,
++			always, sec->trusted_mode);
+ 
+-#ifdef HAVE_LDAP_SET_OPTION
+-	/* set LDAP version 3 protocol options, the necessity of this	*/
+-	/* was pointed out by Guy De Leeuw (G.De_Leeuw@eurofer.be)	*/
+-	if (sec->ldapversion != 0) {
+-		if (LDAP_OPT_SUCCESS != ldap_set_option(result,
+-			LDAP_OPT_PROTOCOL_VERSION, &sec->ldapversion)) {
+-		ap_log_rerror(APLOG_MARK, APLOG_NOERRNO|APLOG_ERR, 0, r,
+-			"[%d] cannot set the protocol version", (int)getpid());
+-		} else {
+-			AUTHZ_RDEBUG("[%d] protocol version set to %d",
+-				(int)getpid(), sec->ldapversion);
+-		}
+-	}
+-#endif /* HAVE_LDAP_SET_OPTION */
++	return ldc;
++}
+ 
+-	return result;
++/* utility function: bind (specific connection)				*/
++int authz_util_ldap_connection_bind(authz_ldap_config_rec *sec, request_rec *r, util_ldap_connection_t *ldc) {
++	return util_ldap_connection_open(r, ldc);	
+ }
+ 
+-/* utility function: tear down ldap connection when it is no longer	*/
+-/*                   used						*/
+-int	authz_ldap_unbind(authz_ldap_config_rec *sec, LDAP *l) {
+-	return ldap_unbind_s(l);
++/* utility function: unbind (specific connection)			*/
++apr_status_t authz_util_ldap_connection_unbind(authz_ldap_config_rec *sec, util_ldap_connection_t *ldc) {
++	return util_ldap_connection_unbind(ldc);
+ }
+ 
+-/* utility function: establish the ldap connection in the conf rec	*/
++/* utility function: unbind, close connection (default connection)	*/
++int	authz_ldap_unbind(authz_ldap_config_rec *sec, request_rec *r) {
++	authz_util_ldap_connection_unbind(sec, sec->ldc);
++	sec->ldc = NULL;
++
++	/* always return LDAP_SUCCESS, since authz_util_ldap_connection_unbind	*/
++	/* always returns APR_SUCCESS						*/
++	return LDAP_SUCCESS;
++}
++
++/* utility function: connect to the directory and bind (default connection)	*/
+ int	authz_ldap_connect(authz_ldap_config_rec *sec, request_rec *r) {
++	util_ldap_connection_t	*ldc;
+ 	int			rc;
+ 	
+ 	/* nothing to do if we already have a connection to the server	*/
+-	if (sec->ldap) {
++	if (sec->ldc) {
+ 		AUTHZ_RDEBUG("[%d] ldap connection already established",
+ 			(int)getpid());
+ 		return OK;
+ 	}
+ 
+-	/* build the connection now					*/
+-	sec->ldap = authz_ldap_init(sec, r);
+-	if (sec->ldap == NULL)
+-		return -1;
++	/* inv: sec-ldap == NULL					*/
+ 
+-	/* perform a nonanymous bind if bind user and password are set	*/
+-	if ((rc = ldap_simple_bind_s(sec->ldap, sec->binddn, sec->bindpw))
+-		!= LDAP_SUCCESS) {
+-		if (sec->loglevel >= APLOG_EMERG)
+-		ap_log_rerror(APLOG_MARK, APLOG_EMERG, 0, r,
+-			"cannot bind to "
+-			"[%d] LDAP Server as %s/%s: %d", (int)getpid(), 
+-			sec->binddn, sec->bindpw, rc);
++	/* we need our separate connection 				*/
++	ldc = authz_util_ldap_connection_find(sec, r, sec->binddn, sec->bindpw);
++
++	/* connect and bind */
++	rc = authz_util_ldap_connection_bind(sec, r, ldc);
++	if (rc == LDAP_SUCCESS) {
++		/* the connection is now valid				*/
++		sec->ldc = ldc;
++		AUTHZ_RDEBUG("[%d] ldap connection established (%s)",
++			(int)getpid(), ldc->reason ? ldc->reason : "-");
++		return OK;
++	} else {
++		/* connection failure					*/
++		if (sec->loglevel >= APLOG_EMERG) {
++			ap_log_rerror(APLOG_MARK, APLOG_EMERG, 0, r,
++				"cannot bind to "
++				"[%d] LDAP Server as %s/%s: %d = '%s'", (int)getpid(), 
++				sec->binddn, sec->bindpw, rc, ldap_err2string(rc));
++		}
+ 		return -1;
+ 	}
+-	AUTHZ_RDEBUG("[%d] bind to ldap server succeeded", (int)getpid());
+-	return OK;
+ }
+ 
+ /* utility function: rebuild the ldap connection, which may have gone	*/
+@@ -119,8 +130,7 @@
+ 	AUTHZ_RDEBUG("[%d] LDAP reconnect", (int)getpid());
+ 
+ 	/* force closing of the connection, free of resources		*/
+-	authz_ldap_unbind(sec, sec->ldap);
+-	sec->ldap = NULL;
++	authz_ldap_unbind(sec, r);
+ 	
+ 	/* esablish connection using the method as previously		*/
+ 	return authz_ldap_connect(sec, r);
+@@ -136,7 +146,7 @@
+ 	int	rc;
+ 	
+ 	/* try search 							*/
+-	rc = ldap_search_s(sec->ldap, base, scope, (char *)filter,
++	rc = ldap_search_s(SEC_LDC_LDAP(sec->ldc), base, scope, (char *)filter,
+ 		attrs, attrsonly, res);
+ 	if (rc != LDAP_SUCCESS) {
+ 		/* display the cause for the problem as a string. We	*/
+@@ -162,7 +172,7 @@
+ 	}
+ 
+ 	AUTHZ_RDEBUG("[%d] retry the search", (int)getpid());
+-	return ldap_search_s(sec->ldap, base, scope, (char *)filter, attrs,
++	return ldap_search_s(SEC_LDC_LDAP(sec->ldc), base, scope, (char *)filter, attrs,
+ 		attrsonly, res);
+ }
+ 

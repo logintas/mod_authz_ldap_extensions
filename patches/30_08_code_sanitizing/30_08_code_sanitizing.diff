@@ -1,0 +1,69 @@
+diff -rN -u mod_authz_ldap-0.30.old/module/certmap.c mod_authz_ldap-0.30/module/certmap.c
+--- mod_authz_ldap-0.30.old/module/certmap.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/certmap.c	2012-04-26 14:54:43.000000000 +0200
+@@ -94,9 +94,17 @@
+ 	i2d_X509_bio(bio_mem, xs);
+ 	l = BIO_ctrl_pending(bio_mem);
+ 	v = apr_palloc(r->pool, l);
+-	BIO_read(bio_mem, v, l);
++	if (NULL != v) {
++		BIO_read(bio_mem, v, l);
++	}
+ 	BIO_free(bio_mem);
+ 
++	if (NULL == v) {
++		AUTHZ_RDEBUG("[%d] could not allocate memory for certificate: %s",
++			(int)getpid(), v);
++		return NULL;
++	}
++
+ 	/* quote the whole stuff so that it can safely be used in a 	*/
+ 	/* filter							*/
+ 	cp = apr_palloc(r->pool, 3 * l + 1);
+@@ -234,9 +242,17 @@
+ 
+ 	l = BIO_ctrl_pending(bio_mem);
+ 	v = apr_palloc(r->pool, l);
+-	BIO_read(bio_mem, v, l);
++	if (NULL != v) {
++		BIO_read(bio_mem, v, l);
++	}
+ 	BIO_free(bio_mem);
+ 
++	if (NULL == v) {
++		AUTHZ_RDEBUG("[%d] could not allocate memory for MS X500 altSecurityIdentity: %s",
++			(int)getpid(), v);
++		return NULL;
++	}
++
+ 	/* Now, Active directory uses E for emailAddress, so we have to
+ 	   fix it ourselves */
+ 	at_boundary = 1;
+@@ -350,6 +366,13 @@
+ 	  		/* copy the value out */
+ 			l = subjectaltname->d.otherName->value->value.utf8string->length;
+ 			v = apr_palloc(r->pool, l+1);
++
++			if (NULL == v) {
++				AUTHZ_RDEBUG("[%d] could not allocate memory for userPrincipalName: %s",
++					(int)getpid(), v);
++				return NULL;
++			}
++
+ 			memcpy(v,
+ 			       subjectaltname->d.otherName->value->value.utf8string->data,
+ 			       l);
+@@ -437,6 +460,13 @@
+ 		  		/* copy the value out */
+                                 l = strlen(pBuffer);
+ 				v = apr_palloc(r->pool, l + 1);
++
++				if (NULL == v) {
++					AUTHZ_RDEBUG("[%d] could not allocate memory for subjectAltName email: %s",
++						(int)getpid(), v);
++					return NULL;
++				}
++
+ 				memcpy(v, pBuffer, l);
+ 				v[l] = '\0';
+ 

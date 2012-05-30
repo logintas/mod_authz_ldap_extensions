@@ -1,0 +1,344 @@
+diff -rN -u mod_authz_ldap-0.30.old/docs/reference.html mod_authz_ldap-0.30/docs/reference.html
+--- mod_authz_ldap-0.30.old/docs/reference.html	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/docs/reference.html	2012-04-26 14:59:13.000000000 +0200
+@@ -61,6 +61,8 @@
+ <li><a href="#AuthzLDAPSetGroupAuth">AuthzLDAPSetGroupAuth</a>
+ <li><a href="#AuthzLDAPMapUserToAttr">AuthzLDAPMapUserToAttr</a>
+ 
++<li><a href="#AuthzLDAPEnvAttributes">AuthzLDAPEnvAttributes</a>
++
+ <li><a href="#AuthzLDAPModifyKey">AuthzLDAPModifyKey</a>
+ 
+ <li><a href="#AuthzLDAPAuthoritative">AuthzLDAPAuthoritative</a>
+@@ -293,6 +295,14 @@
+ either AuthzLDAPDirect or AuthzLDAPMapWithAD are set.
+ 
+ <hr noshade size="1" />
++<strong>Syntax:</strong> <a name="AuthzLDAPEnvAttributes"></a>AuthzLDAPEnvAttributes<i>attributename [ attributname ... ]</i><br />
++<strong>Context:</strong> virtual host, directory<br />
++<strong>Default:</strong> none<br />
++If set, for all given LDAP attributes, the environment variables AUTHENTICATE_<attribute>
++will be set to the returned LDAP attributes values on successful authentication
++(in case authentication returns a valid user entry).
++
++<hr noshade size="1" />
+ <strong>Syntax:</strong> <a name="AuthzLDAPRoleAttributeName"></a>AuthzLDAPRoleAttributeName <i>attributename</i><br />
+ <strong>Context:</strong> virtual host, directory<br />
+ <strong>Default:</strong> none<br />
+diff -rN -u mod_authz_ldap-0.30.old/module/auth.c mod_authz_ldap-0.30/module/auth.c
+--- mod_authz_ldap-0.30.old/module/auth.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/auth.c	2012-04-26 14:59:13.000000000 +0200
+@@ -86,8 +86,9 @@
+ 	int			rc;
+ 	int			result = 0;
+ 	const char		*dn;
+-	char			*attrs[2];
++	char			**attrs;
+ 	const char		**vals = NULL;
++	int			env_attrs_index;
+ 	char			filter[MAX_STRING_LEN];
+ 
+ 	/* for logging purposes, we would like to have user name and	*/
+@@ -138,14 +139,19 @@
+ 			USER(r), sec->userbase);
+ 	}
+ 
+-	/* if we have a AuthzLDAPMapUser attribute, we also ask	*/
+-	/* for it						*/
++	/* get list of required attributes (prepend sec->mapusertoattr if required)	*/
++	int prepend = 0;
++
++	if (sec->mapusertoattr) {
++		prepend = 1;
++	}
++	env_attrs_index = prepend;
++
++	attrs = get_env_attributes(sec, r, prepend);
++
+ 	if (sec->mapusertoattr) {
+ 		attrs[0] = sec->mapusertoattr;
+-	} else {
+-		attrs[0] = LDAP_NO_ATTRS;
+ 	}
+-	attrs[1] = NULL;
+ 
+ 	/* do authentication */
+ 
+@@ -209,6 +215,11 @@
+ 		*/
+ 	}
+ 
++	/* add environment varaibles according to AuthzLDAPEnvAttributes	*/
++	if (vals != NULL) {
++		add_env_variables(sec, r, attrs, vals, env_attrs_index);
++	}
++
+ 	AUTHZ_RDEBUG("[%d] bind for %s succeeds", (int)getpid(), dn);
+ 
+ 	/* remember the user distinguished name				*/
+diff -rN -u mod_authz_ldap-0.30.old/module/certmap.c mod_authz_ldap-0.30/module/certmap.c
+--- mod_authz_ldap-0.30.old/module/certmap.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/certmap.c	2012-04-26 14:59:13.000000000 +0200
+@@ -510,10 +510,11 @@
+ 	int			scope;
+ 
+ 	char			filter[MAX_STRING_LEN];
+-	char			*attrs[3];
++	char			**attrs;
+ 	int			attr_index;
+ 	int			attr_index_owner = -1;
+ 	int			attr_index_map = -1;
++	int			env_attrs_index;
+ 
+ 	const char		*dn;
+ 	const char		**vals = NULL;
+@@ -666,6 +667,20 @@
+ 	/* we have to retrieve the dn from the directory, which is 	*/
+ 	/* either the DN of the object returned or the value of the	*/
+ 	/* owner attribute						*/
++
++	/* get list of required attributes (prepend "owner" and sec->mapusertoattr if required)	*/
++	int prepend = 0;
++
++	if (AUTHMAPMETHOD_NEEDSOWNER(sec->mapmethod)) {
++		prepend++;
++	}
++	if (sec->mapusertoattr) {
++		prepend++;
++	}
++	env_attrs_index = prepend;	/* start of env attributes, used later to set environment variables	*/
++
++	attrs = get_env_attributes(sec, r, prepend);
++
+ 	attr_index = 0;
+ 	if (AUTHMAPMETHOD_NEEDSOWNER(sec->mapmethod)) {
+ 		attrs[attr_index] = "owner";
+@@ -680,11 +695,6 @@
+ 		AUTHZ_RDEBUG("[%d] authz_ldap need attribute: %s",
+ 			(int)getpid(), sec->mapusertoattr);
+ 	}
+-	if ( attr_index == 0 ) {
+-		attrs[attr_index] = LDAP_NO_ATTRS;
+-		attr_index++;
+-  	}
+-	attrs[attr_index] = NULL;
+ 
+ 	if (authz_util_ldap_cache_getuserdn(sec, r, base, scope, attrs, filter, &dn, &vals) != LDAP_SUCCESS) {
+ 
+@@ -723,6 +733,12 @@
+ 		}
+ 		/* XXX We should really support this in other 	*/
+ 		/* mappings 					*/
++
++		/* add environment varaibles according to AuthzLDAPEnvAttributes	*/
++		/* (only possible if we got a user)					*/
++		if (vals != NULL) {
++			add_env_variables(sec, r, attrs, vals, env_attrs_index);
++		}
+ 	} else {
+ 		/* map method does not return a user, so we 	*/
+ 		/* we have to go after the owner attribute	*/
+diff -rN -u mod_authz_ldap-0.30.old/module/mod_authz_ldap.h mod_authz_ldap-0.30/module/mod_authz_ldap.h
+--- mod_authz_ldap-0.30.old/module/mod_authz_ldap.h	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/mod_authz_ldap.h	2012-04-26 14:59:13.000000000 +0200
+@@ -89,6 +89,9 @@
+ 	(s == AUTHMAPMETHOD_EMAIL) || \
+ 	(s == AUTHMAPMETHOD_EMAIL_OR_UPN))
+ 
++// from mod_auth.h (prefix for environment variables of ldap attributes)
++#define AUTHN_PREFIX "AUTHENTICATE_"
++
+ typedef struct {
+ 	/* whether or not to be active					*/
+ 	int	method;		/* AuthzLDAPMethod			*/
+@@ -129,6 +132,9 @@
+ 	/* name of role attribute					*/
+ 	char	*roleattrname;	/* AuthzLDAPRoleAttributeName		*/
+ 
++	/* user's entry's attributes to provide in environment variables		*/
++	apr_array_header_t	*env_attributes;	/* AuthzLDAPEnvAttributes	*/	/* multiple values		*/
++
+ 	/* Password aging						*/
+ 	char	*modifykey;	/* AuthzLDAPModifyKey			*/
+ 
+@@ -148,6 +154,7 @@
+ /* Apache 2 specific stuff */
+ #define USER(r)	r->user
+ #include <apr_strings.h>
++#include <apr_lib.h>
+ #include <apr_base64.h>
+ #include <mod_ssl.h>
+ #define	AP_GET_REMOTE_HOST(a, b, c, d)	ap_get_remote_host(a, b, c, d)
+@@ -282,6 +289,13 @@
+ extern const char	*authz_ldap_get_user(authz_ldap_config_rec *sec,
+ 				request_rec *r, int nametype);
+ 
++/*
++ * utility functions to handle extra attributes according to AuthzLDAPEnvAttributes
++ * (used in auth.c [authz_ldap_authenticate] and certmap.c [authz_ldap_map_user])
++ */
++extern char	**get_env_attributes(authz_ldap_config_rec *sec, request_rec *r, const int prepend);
++extern void	add_env_varialbes(authz_ldap_config_rec *sec, request_rec *r, const char **attrs, const char **, const int offset);
++
+ /*************************************************************************
+ ** declarations for auth.c						**
+ *************************************************************************/
+diff -rN -u mod_authz_ldap-0.30.old/module/modconf.c mod_authz_ldap-0.30/module/modconf.c
+--- mod_authz_ldap-0.30.old/module/modconf.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/modconf.c	2012-04-26 14:59:13.000000000 +0200
+@@ -60,6 +60,30 @@
+ 	return NULL;
+ }
+ 
++/* iterate over all values of AuthzLDAPEnvAttributes */
++static const char	*authz_ldap_set_env_attributes_slot(cmd_parms *parms,
++	void *mconfig, const char *arg) {
++
++	authz_ldap_config_rec	*sec;
++	char                    *value;
++	char			**element;
++
++	sec = (authz_ldap_config_rec *)mconfig;
++
++
++#ifdef AUTHZ_LDAP_DEBUG
++	fprintf(stderr, "%s:%d: adding env_attributes value at %p: '%s'\n",
++		__FILE__, __LINE__, (void *)sec, (arg) ? arg : "(null)");
++#endif
++
++	/* add value to sec->env_attributes array */
++	value = apr_pstrdup(parms->pool, arg);
++	element = (char **)apr_array_push(sec->env_attributes);
++	*element = value;
++
++	return NULL;
++}
++
+ static const char	*authz_ldap_set_group_scope_slot(cmd_parms *parms,
+ 	void *mconfig, const char *arg) {
+ 	authz_ldap_config_rec	*sec;
+@@ -377,6 +401,11 @@
+ 		OR_AUTHCFG,
+ 		"The attribute name(s) associated with the username"
+ 	),
++	AP_INIT_ITERATE(
++		"AuthzLDAPEnvAttributes", authz_ldap_set_env_attributes_slot, NULL,
++		OR_AUTHCFG,
++		"The user's entry's attribute name(s) that should be provided as environment variables"
++	),
+ 	AP_INIT_TAKE1(
+ 		"AuthzLDAPUserBase", ap_set_string_slot,
+ 		(void *)APR_OFFSETOF(authz_ldap_config_rec, userbase),
+@@ -553,6 +582,9 @@
+ 		/* role attribute name					*/
+ 		sec->roleattrname = NULL;
+ 
++		/* user's entry's attributes to provide in environment variables	*/
++		sec->env_attributes = apr_array_make(p, 0, sizeof(char *));
++
+ 		/* password aging					*/
+ 		sec->modifykey = NULL;
+ 
+@@ -585,6 +617,7 @@
+ 	authz_ldap_link(userbase);
+ 	authz_ldap_link(userkey);
+ 	authz_ldap_link(username_attributes);
++	authz_ldap_link(env_attributes);
+ 
+ 	authz_ldap_link(groupbase);
+ 	authz_ldap_link(groupkey);
+diff -rN -u mod_authz_ldap-0.30.old/module/utilities.c mod_authz_ldap-0.30/module/utilities.c
+--- mod_authz_ldap-0.30.old/module/utilities.c	2012-04-26 14:54:43.000000000 +0200
++++ mod_authz_ldap-0.30/module/utilities.c	2012-04-26 14:59:13.000000000 +0200
+@@ -467,3 +467,91 @@
+ 		apr_table_set(r->notes, "authz_ldap::authorized", c);
+ 	}
+ }
++
++/*
++ * utility functions to handle extra attributes according to AuthzLDAPEnvAttributes
++ * (used in auth.c [authz_ldap_authenticate] and certmap.c [authz_ldap_map_user])
++ */
++
++/*
++ * Convert sec->env_attributes to array char **
++ * return array (from request's pool)
++ */
++char	**get_env_attributes(authz_ldap_config_rec *sec, request_rec *r, const int prepend) {
++	int	n = 0;
++	int	curr;
++	char	**attrs;
++	int	i;
++
++	/*
++	 * count number of required elements in array
++	 */
++
++	/* should we reserve space for some elements?		*/
++	if (prepend > 0) {
++		n = prepend;
++	}
++
++	/* number of attributes requested by AuthzLDAPEnvAttributtes	*/
++	n += sec->env_attributes->nelts;
++
++	/*
++	 * fill array
++	 */
++
++	if (n > 0) {
++		/* request array of [n + 1] elements			*/
++		attrs = apr_palloc(r->pool, sizeof(char *) * (n + 1));
++
++		/* current position					*/
++		curr = 0;
++
++		/* if we should reserve space, initialize it now	*/
++		if (prepend > 0) {
++			for (i = 0; i < prepend; i++) {
++					attrs[curr] = NULL;
++					curr++;
++			}
++		}
++
++		/* add attributes from LDAPAuthzLDAPEnvAttributes	*/
++		for (i = 0; i < sec->env_attributes->nelts; i++) {
++			attrs[curr] = ((char **)sec->env_attributes->elts)[i];
++			AUTHZ_RDEBUG("[%d] Request LDAP attribute  %s", (int)getpid(), attrs[curr]);
++			curr++;
++		}	
++
++		/* terminate list					*/
++		attrs[curr] = NULL;
++	} else {
++		/* no attributes requested; handle special case		*/
++		attrs = apr_palloc(r->pool, sizeof(char *) * 2);
++		attrs[0] = LDAP_NO_ATTRS;
++		attrs[1] = NULL;
++	}
++
++	return attrs;
++}
++
++/*
++ * set requested environment variables
++ */
++void	add_env_variables(authz_ldap_config_rec *sec, request_rec *r, const char **attrs, const char **vals, const int offset) {
++	/* adapted from mod_authnz_ldap */
++	if (attrs && vals) {
++		apr_table_t *e = r->subprocess_env;
++        	int i = offset;
++		while (attrs[i]) {
++			char *str = apr_pstrcat(r->pool, AUTHN_PREFIX, attrs[i], NULL);
++			int j = sizeof(AUTHN_PREFIX)-1; /* string length of "AUTHENTICATE_", excluding the trailing NIL */
++			while (str[j]) {
++				str[j] = apr_toupper(str[j]);
++				j++;
++			}
++			AUTHZ_RDEBUG("[%d] Setting environment variable %s from LDAP entry", (int)getpid(), str);
++			apr_table_setn(e, str, vals[i]);
++
++			i++;
++		}
++	}
++}
