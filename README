@@ -1,0 +1,140 @@
+Extensions for mod_authz_ldap by Logintas AG
+============================================
+
+These patches add various extensions and modifications to the Apache module 'mod_authz_ldap'
+by Dr. Andreas Mueller. The extensions had been developed to meet the requirements for the
+deployment by Logintas AG.
+
+All code provided by Logintas AG is copyright (C) 2010-2012 Logintas AG.
+
+These patches are published under the same licence as the module mod_authz_ldap version 0.30.
+The file COPYING contains the licence.
+
+
+
+The patches are suitable to mod_authz_ldap version 0.30. The website of this module is
+http://authzldap.othello.ch/, and the module can be downloaded from http://authzldap.othello.ch/download/.
+
+
+Patches
+=======
+
+
+patches/30_01_fedora_patches
+----------------------------
+
+Original patches by Fedora from mod_authz_ldap-0.26-12.src.rpm
+Adapted for mod_authz_ldap-0.29 by Logintas AG.
+The patch '30_01_fedora_patches' merges the following original patches:
+ * mod_authz_ldap-0.29-hook-sslvar.diff: ssl_var_lookup as optional function
+ * mod_authz_ldap-0.29-parser.diff:      Correction in parser
+ * mod_authz_ldap-0.29-passlog.diff:     Don't log password on LDAP bind
+ * mod_authz_ldap-0.29-subreq.diff:      Earlier deciscion about sub-request
+
+
+patches/30_02_support_apache22
+------------------------------
+
+Support for Apache 2.2 (correct position in module chain)
+(This patch is required on Debian system, maybe on others, too.)
+
+patches/30_03_fixes
+-------------------
+
+Initialize sec->bindmapped
+
+
+patches/30_04_use_mod_ldap
+--------------------------
+
+Use apache's core module mod_ldap instead of direct LDAP connections
+
+The Apache module 'mod_ldap' implements a library for standardized access
+to LDAP servers. We considered it as reasonable to use this module instead
+of directly speach to the LDAP server.
+
+
+patches/30_05_multiple_username_attributes
+------------------------------------------
+
+Allow search by username using multiple LDAP attributes
+
+For our purposes and requirements, it was required that the username given
+by the user could be looked up in multiple LDAP attributes. The statement
+'AuthzLDAPUsernameAttributes' allows to define multiple LDAP attributes
+to be considered as username fields. If this statement is defined, an appropriate
+filter is constructed for querying the LDAP directory.
+
+Documentation: docs/reference.html
+
+
+patches/30_06_mapping_method_email_upn
+--------------------------------------
+
+Added support to map certificate by e-mail or User Principal Name
+
+In our deployment, we didn't wanted to preliminary store the users' certificates
+in the LDAP directory. Instead, we wanted to map the e-mail address contained in the
+user's certificate to an appropriate field in the LDAP directory. Since the e-mail address
+is part of the certificate, we consider this value as trustworthy and use it as unique identifier
+for the person. (Optionally, to support Windows environments, the UserPrincipalName of a certificate 
+can be used for the same purpose.)
+
+Documentation: docs/reference.html und docs/README.map_by_email
+
+
+patches/30_07_no_password_logging
+---------------------------------
+
+Generally avoid password logging for LDAP operations
+
+
+patches/30_08_code_sanitizing
+-----------------------------
+
+Somoe code sanitizing in certmap.c, mainly in authz_ldap_get_subject_alternative_name_email.
+
+
+patches/30_09_support_ldaps
+---------------------------
+
+Added support for SSL (ldaps).
+
+
+
+patches/30_10_allow_connection_reuse
+------------------------------------
+
+Added support for mod_ldap's connection reuse
+
+
+patches/30_11_util_ldap_caching
+-------------------------------
+
+Added support for mod_ldap's caching functionality to get better performance.
+
+
+patches/30_12_setting_variables
+-------------------------------
+
+Added support to export LDAP attributes as environment variables.
+
+
+
+IMPORTANT: Most patches depend other patches, so the order how the patches are applied is important.
+
+
+
+Known limitations
+=================
+
+- By the use of mod_ldap instead of direct LDAP connections, the semantics of LDAP queries slightly
+  changed with respect to uniqueness of search results. This especially applies to to the usage
+  of 'require filter' for autorization. Previously, if the LDAP search with the given filter resulted
+  in one ore more entries, the requirement had been considered as fulfilled. The usage of mod_ldap
+  forces any LDAP search to be unique, so if the LDAP search with the given filter results in
+  multiple entries, the autorization requirement is considered as not given since the result is
+  not unique. Thus, in case 'require filter' has been used in a deployment, special care should be
+  taken if these patches are deployed.
+- The module is not thread safe. That is, it must be used only with Apache's "prefork" MPM model, but not
+  with the threaded "worker" or "event" MPM models.
