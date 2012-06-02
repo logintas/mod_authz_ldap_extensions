@@ -1,0 +1,68 @@
+This file gives instructions on how to apply the patches to the
+original module, how to compile it and how to use the module in the
+intended way.
+
+These instructions are directed to a Debian or Ubuntu system.
+For other distributions, you need to adapt them as required.
+
+Prequisits:
+- Package apache2-prefork-dev
+- Package wget
+- Package git-core
+
+
+Applying the patches
+====================
+
+1. Create working directory
+
+$ mkdir $HOME/src
+$ cd $HOME/src
+
+2. Download and unpack the original module
+
+$ wget http://authzldap.othello.ch/download/mod_authz_ldap-0.30.tar.gz
+$ tar xzf mod_authz_ldap-0.30.tar.gz
+
+3. Checkout the patches from the repository
+
+$ git checkout git://github.com/logintas/mod_authz_ldap_extensions.git
+
+4. Apply the patches (in order)
+
+$ cd mod_authz_ldap-0.30
+$ for PATCH in ../mod_authz_ldap_extensions/patches/*/*.diff; do patch -p1 < $PATCH; done
+
+   Optionally apply the patch the create a Debian source package:
+
+$ patch -p1 < ../mod_authz_ldap_extensions/patches_debian/30_debianization
+
+
+Compilling the module
+=====================
+
+This section instructs how to compile the module using autoconf/automake
+independently of any Linux distribution.
+
+$ cd $HOME/src/mod_authz_ldap-0.30
+$ ./configure --with-apxs=/usr/bin/apxs2 --with-apr=/usr/bin/apr-1-config --with-apu=/usr/bin/apu-1-config
+$ make
+$ sudo make install
+
+
+Creating a Debian package
+=========================
+
+These patches include a patch to create the required directory and files
+to produce a Debian package. This requires that you have applied the
+corresponding patch in step 4.
+
+To produce the debian package:
+
+$ cd $HOME/src/mod_authz_ldap-0.30
+$ dpkg-buildpackage -b -us -uc
+
+This build a binary Debian package in ../libapache2-mod-authz-ldap_0.30-1_i386.deb.
+It can be installed on the target host using the following command:
+
+# dpkg -i libapache2-mod-authz-ldap_0.30-1_i386.deb

@@ -1,0 +1,16 @@
+* Code review of the patches concerning security
+
+  These patches have been developed with security in main focus.
+  Still, the authors are not real experts in developing Apache
+  security modules. Therefore, we recommend to do a code review before
+  using these patches.
+
+  Hereby, the authors (Logintas AG) explicitly emphasize that there is
+  no warranty for these patches, neither by Logintas AG nor by the
+  author of the original module.
+
+  To do a code review, we recommend the following knowledge:
+  - Apache webserver
+  - Developing modules for the Apache webserver
+  - LDAP
+  - OpenSSL
