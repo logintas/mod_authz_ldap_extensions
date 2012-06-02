@@ -1,0 +1,176 @@
+diff -rN -u mod_authz_ldap-0.30.old/debian/README.Debian mod_authz_ldap-0.30/debian/README.Debian
+--- mod_authz_ldap-0.30.old/debian/README.Debian	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/README.Debian	2012-06-02 17:23:05.000000000 +0200
+@@ -0,0 +1,7 @@
++libapache2-mod-authz-ldap for Debian
++------------------------------------
++
++Debianized version of mod_authz_ldap 0.30.
++Used patches from Fedora (mod_authz_ldap-0.26-12.src.rpm).
++
++ -- Daniel Lutz <danlutz@watz.ch>  Sat, 02 Jun 2012 17:21:25 +0200
+diff -rN -u mod_authz_ldap-0.30.old/debian/authz_ldap.load mod_authz_ldap-0.30/debian/authz_ldap.load
+--- mod_authz_ldap-0.30.old/debian/authz_ldap.load	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/authz_ldap.load	2011-02-03 18:17:07.000000000 +0100
+@@ -0,0 +1 @@
++LoadModule authz_ldap_module /usr/lib/apache2/modules/mod_authz_ldap.so
+diff -rN -u mod_authz_ldap-0.30.old/debian/changelog mod_authz_ldap-0.30/debian/changelog
+--- mod_authz_ldap-0.30.old/debian/changelog	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/changelog	2012-06-02 17:22:53.000000000 +0200
+@@ -0,0 +1,5 @@
++libapache2-mod-authz-ldap (0.30-1) unstable; urgency=low
++
++  * Initial version.
++
++ -- Daniel Lutz <danlutz@watz.ch>  Sat, 02 Jun 2012 17:21:25 +0200
+diff -rN -u mod_authz_ldap-0.30.old/debian/compat mod_authz_ldap-0.30/debian/compat
+--- mod_authz_ldap-0.30.old/debian/compat	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/compat	2011-02-03 18:17:07.000000000 +0100
+@@ -0,0 +1 @@
++5
+diff -rN -u mod_authz_ldap-0.30.old/debian/control mod_authz_ldap-0.30/debian/control
+--- mod_authz_ldap-0.30.old/debian/control	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/control	2012-06-02 17:27:54.000000000 +0200
+@@ -0,0 +1,23 @@
++Source: libapache2-mod-authz-ldap
++Priority: extra
++Maintainer: Daniel Lutz <danlutz@watz.ch>
++Build-Depends: debhelper (>= 5), autotools-dev, autoconf, automake, libtool, libssl-dev, libldap2-dev, apache2-prefork-dev | apache2-threaded-dev
++Standards-Version: 3.7.2
++Section: net
++
++Package: libapache2-mod-authz-ldap
++Section: net
++Architecture: any
++Depends: apache2.2-common, ${shlibs:Depends}, ${misc:Depends}
++Description: Apache LDAP authentication/authorization module with support for X.509 client certificates.
++ This module allows to authenticate/authorize a user by mapping his X.509 user certificate
++ to his distinguished name in an LDAP directory.
++ .
++ This apache module tries to solve the following problems that other such modules may not solve in all cases:
++ 1. Map the short form of the distinguished name of a certificate and its issuer obtained from the environment
++    of mod_ssl to a user distinguished name in an LDAP directory.
++ 2. Check the age of a password in an LDAP directory, denying authorization in case the password is to old.
++ 3. Authorize a user based on roles or an arbitrary LDAP filter expression.
++ 4. Authorize a user based on whether he owns a file or belongs to the group owning a file. 
++ .
++ More information about this module can be found at http://authzldap.othello.ch/index.html.
+diff -rN -u mod_authz_ldap-0.30.old/debian/copyright mod_authz_ldap-0.30/debian/copyright
+--- mod_authz_ldap-0.30.old/debian/copyright	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/copyright	2012-06-02 17:32:05.000000000 +0200
+@@ -0,0 +1,34 @@
++This package was debianized by Daniel Lutz (Logintas 2008) <daniel.lutz@logintas.ch> on
++Sat, 02 Jun 2012 17:21:25 +0200.
++
++It was downloaded from http://authzldap.othello.ch/.
++It contains patches from Fedora (taken from mod_authz_ldap-0.26-12.src.rpm)
++
++Upstream Author(s): 
++
++    Dr. Andreas Mueller <andreas.mueller@othello.ch>
++
++Copyright: 
++
++    (c) 2000 Dr. Andreas Mueller 
++
++License:
++
++    This module is distributed under the terms of the Apache License, please check the LICENSE file in
++    your apache distribution or the COPYING file of the mod_authz_ldap distribution for the exact terms
++    of the license. In particular, the following disclaimer applies:
++    
++    THIS SOFTWARE IS PROVIDED BY ``AS IS'' AND ANY EXPRESSED OR IMPLIED
++    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++    IN NO EVENT SHALL THE AUTHOR OR THE CONTRIBUTORS BE LIABLE FOR ANY
++    DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++    OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
++    STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
++    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
++    POSSIBILITY OF SUCH DAMAGE.
++
++The Debian packaging is (C) 2010, Logintas AG <info@logintas.ch> and
++is licensed under the GPL, see `/usr/share/common-licenses/GPL'.
+diff -rN -u mod_authz_ldap-0.30.old/debian/dirs mod_authz_ldap-0.30/debian/dirs
+--- mod_authz_ldap-0.30.old/debian/dirs	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/dirs	2011-02-03 18:17:07.000000000 +0100
+@@ -0,0 +1,2 @@
++usr/lib/apache2/modules
++etc/apache2/mods-available
+diff -rN -u mod_authz_ldap-0.30.old/debian/docs mod_authz_ldap-0.30/debian/docs
+--- mod_authz_ldap-0.30.old/debian/docs	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/docs	2011-02-03 18:17:07.000000000 +0100
+@@ -0,0 +1,3 @@
++NEWS
++README
++TODO
+diff -rN -u mod_authz_ldap-0.30.old/debian/rules mod_authz_ldap-0.30/debian/rules
+--- mod_authz_ldap-0.30.old/debian/rules	1970-01-01 01:00:00.000000000 +0100
++++ mod_authz_ldap-0.30/debian/rules	2012-06-02 17:32:26.000000000 +0200
+@@ -0,0 +1,64 @@
++#!/usr/bin/make -f
++
++# Uncomment this to turn on verbose mode.
++#export DH_VERBOSE=1
++
++patch: patch-stamp
++patch-stamp:
++	dh_testdir
++
++	touch patch-stamp
++
++build: build-stamp
++build-stamp: patch-stamp
++	dh_testdir
++
++	#aclocal
++	#libtoolize --copy --force
++	#autoconf
++	#automake -f
++	#./configure --with-apxs=/usr/bin/apxs2
++	./configure --with-apxs=/usr/bin/apxs2 --with-apr=/usr/bin/apr-1-config --with-apu=/usr/bin/apu-1-config
++	$(MAKE)
++
++	touch build-stamp
++
++clean:
++	dh_testdir
++	dh_testroot
++	rm -f build-stamp
++	rm -f patch-stamp
++
++	[ ! -f Makefile ] || $(MAKE) distclean
++
++	dh_clean 
++
++install: build-stamp
++	dh_testdir
++	dh_testroot
++	dh_clean -k 
++	dh_installdirs
++	
++	cp module/.libs/mod_authz_ldap.so $(CURDIR)/debian/libapache2-mod-authz-ldap/usr/lib/apache2/modules
++	cp debian/authz_ldap.load $(CURDIR)/debian/libapache2-mod-authz-ldap/etc/apache2/mods-available
++
++binary-indep: build install
++
++binary-arch: build-stamp install
++	dh_testdir
++	dh_testroot
++	dh_installchangelogs 
++	dh_installdocs
++#	dh_installexamples
++	dh_installdebconf	
++	dh_strip
++	dh_compress
++	dh_fixperms
++	dh_installdeb
++	dh_shlibdeps
++	dh_gencontrol
++	dh_md5sums
++	dh_builddeb
++
++binary: binary-indep binary-arch
++.PHONY: patch build clean binary-indep binary-arch binary install configure
