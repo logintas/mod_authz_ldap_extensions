@@ -7,7 +7,7 @@ deployment by Logintas AG.
 
 All code provided by Logintas AG is copyright (C) 2010-2012 Logintas AG.
 
-These patches are published under the same licence as the module mod_authz_ldap version 0.30.
+These patches are published under the same license as the module mod_authz_ldap version 0.30.
 The file COPYING contains the licence.
 
 
@@ -16,8 +16,38 @@ The patches are suitable to mod_authz_ldap version 0.30. The website of this mod
 http://authzldap.othello.ch/, and the module can be downloaded from http://authzldap.othello.ch/download/.
 
 
-Patches
-=======
+Please note that there hasn't yet been done a formal code review on these patches.
+Find more about this in the file TODO.
+
+Instructions on how to apply the patches and use the patched module can be found
+in the file ISNTALL.
+
+
+About the patches
+=================
+
+These patches had been developed because of some limitation of the original module
+that couldn't fulfill all of our requirements. The most important requirements
+were:
+- The module must be usable with Apache 2.2 on Debian 5.0 "lenny"
+- Allow accessing multiple LDAP directories with different tree structures
+- Allow multiple LDAP attributes as username
+- Support multiple types of smartcards/certificates by multiple issuers
+- Don't require to add any information of the certificate into the LDAP directory,
+  like the certificate itself or issuer/subject/serial number
+- Allow mapping from certificate to LDAP entry by certificate's e-mail address
+  or universal principal name
+- Support connection to LDAP server with SSL (additionally to plaintext and TLS)
+- Improve performance by caching LDAP results
+- Export LDAP values of user's entry as envronment variables to be used in
+  protected web applications (e. g. user's realname, e-mail address, etc.)
+
+We publish these patches in the hope that people having similar requirements may
+fulfill their requirements using these patches.
+
+
+Descriptions of the patches
+===========================
 
 
 patches/30_01_fedora_patches
